@@ -1,6 +1,7 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "regions": ["cdg1", "fra1", "iad1"],
   "rewrites": [
     { "source": "/proxy", "destination": "/api/proxy" }
   ],

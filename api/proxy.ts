@@ -347,7 +347,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   } catch (e) {
     if (res.headersSent) {
       try {
-        res.destroy();
+        res.destroy?.();
       } catch {
         /* ignore */
       }

@@ -9,6 +9,7 @@ const upstreamSession = {
   lastM3u8ByHlsDir: new Map<string, string>(),
 };
 
+
 function isHttpUrl(s: string): boolean {
   try {
     const u = new URL(s);

@@ -1,7 +1,12 @@
 /**
  * Vercel serverless equivalent of the Vite `/proxy` middleware.
  * Without this, production builds hit `/proxy` on static hosting and Nodecast login fails.
+ *
+ * Media segments (.ts, etc.) are streamed (not fully buffered) so playback starts quickly
+ * and memory/billing stay reasonable.
  */
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 export const config = {
@@ -208,6 +213,27 @@ function readBody(req: VercelRequest): Promise<Buffer> {
   });
 }
 
+/** Do not forward to client; cookies stay in server-side jar like Vite. */
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "content-encoding",
+  "set-cookie",
+]);
+
+function copyUpstreamHeadersToRes(upstream: Response, res: VercelResponse): void {
+  upstream.headers.forEach((value, key) => {
+    const lk = key.toLowerCase();
+    if (HOP_BY_HOP.has(lk)) return;
+    try {
+      res.setHeader(key, value);
+    } catch {
+      /* ignore invalid header names */
+    }
+  });
+}
+
 function isAllowedTarget(target: string): boolean {
   const raw = process.env.PROXY_ALLOWED_HOSTS?.trim();
   if (!raw) return true;
@@ -273,7 +299,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     ingestUpstreamSetCookies(upstream, target);
     const ct =
       upstream.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
-    const buf = Buffer.from(await upstream.arrayBuffer());
 
     const isM3u8Rewrite =
       upstream.ok &&
@@ -282,11 +307,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         target.toLowerCase().includes(".m3u8"));
 
     if (isM3u8Rewrite) {
+      const buf = Buffer.from(await upstream.arrayBuffer());
       const dirKey = hlsTokenDirKey(target);
       if (dirKey) lastM3u8ByHlsDir.set(dirKey, stripDefaultPortHref(target));
-    }
-
-    if (isM3u8Rewrite) {
       const text = buf.toString("utf8");
       const rewritten = rewriteM3u8(text, target);
       res.status(200);
@@ -295,10 +318,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
+    /* Segments and binary: stream so the player receives bytes immediately (no full-buffer). */
     res.status(upstream.status);
-    if (ct) res.setHeader("Content-Type", ct);
-    res.send(buf);
+    if (
+      upstream.status === 204 ||
+      upstream.status === 304 ||
+      method === "HEAD" ||
+      !upstream.body
+    ) {
+      copyUpstreamHeadersToRes(upstream, res);
+      res.end();
+      return;
+    }
+
+    res.once("close", () => {
+      try {
+        ac.abort();
+      } catch {
+        /* ignore */
+      }
+    });
+
+    copyUpstreamHeadersToRes(upstream, res);
+
+    const webBody = upstream.body as import("stream/web").ReadableStream<Uint8Array>;
+    const nodeReadable = Readable.fromWeb(webBody);
+    await pipeline(nodeReadable, res);
   } catch (e) {
+    if (res.headersSent) {
+      try {
+        res.destroy();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     const msg =
       e instanceof Error && e.name === "AbortError"
         ? "Upstream request timed out (60s)."

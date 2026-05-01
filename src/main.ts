@@ -24,17 +24,6 @@ type ServerInfo = {
   server_protocol?: string;
 };
 
-type UserInfo = {
-  auth?: number;
-  username?: string;
-  message?: string;
-};
-
-type PlayerApiResponse = {
-  user_info?: UserInfo;
-  server_info?: ServerInfo;
-};
-
 type ProxiedRequestInit = {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
@@ -153,21 +142,6 @@ async function fetchProxiedJsonWithInit<T>(
   } catch {
     throw new Error("Invalid JSON from server (wrong URL or blocked response).");
   }
-}
-
-function buildPlayerApiUrl(
-  base: string,
-  username: string,
-  password: string,
-  params: Record<string, string> = {}
-): string {
-  const u = new URL(`${base.replace(/\/+$/, "")}/player_api.php`);
-  u.searchParams.set("username", username);
-  u.searchParams.set("password", password);
-  for (const [k, v] of Object.entries(params)) {
-    u.searchParams.set(k, v);
-  }
-  return u.href;
 }
 
 function buildLiveStreamUrl(
@@ -872,40 +846,6 @@ async function resolveNodecastStreamUrl(
     }
   }
   return null;
-}
-
-async function fetchStreamsPerCategory(
-  base: string,
-  username: string,
-  password: string,
-  cats: LiveCategory[],
-  onProgress: (done: number, total: number) => void
-): Promise<Map<string, LiveStream[]>> {
-  const concurrency = 4;
-  const streamsByCat = new Map<string, LiveStream[]>();
-  let idx = 0;
-
-  async function worker(): Promise<void> {
-    while (idx < cats.length) {
-      const i = idx++;
-      const c = cats[i]!;
-      const streamUrl = buildPlayerApiUrl(base, username, password, {
-        action: "get_live_streams",
-        category_id: String(c.category_id),
-      });
-      const streams = await fetchProxiedJson<LiveStream[]>(streamUrl);
-      streamsByCat.set(
-        String(c.category_id),
-        Array.isArray(streams) ? streams : []
-      );
-      onProgress(streamsByCat.size, cats.length);
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, cats.length) }, () => worker())
-  );
-  return streamsByCat;
 }
 
 function updateChannelBadge(streamsInCat: number, shown: number): void {

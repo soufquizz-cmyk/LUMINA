@@ -1,13 +1,13 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "regions": ["cdg1", "fra1", "iad1"],
   "rewrites": [
     { "source": "/proxy", "destination": "/api/proxy" }
   ],
   "functions": {
     "api/proxy.ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "regions": ["cdg1", "fra1", "iad1"]
     }
   }
 }

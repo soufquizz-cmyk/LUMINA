@@ -6,8 +6,7 @@
   ],
   "functions": {
     "api/proxy.ts": {
-      "maxDuration": 60,
-      "regions": ["cdg1", "fra1", "iad1"]
+      "maxDuration": 60
     }
   }
 }

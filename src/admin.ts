@@ -53,6 +53,7 @@ const elAddLeafCategory = $("#admin-add-leaf-category") as HTMLButtonElement;
 const elLeafCategoryList = $("#admin-leaf-category-list") as HTMLUListElement;
 
 const elAddAssignment = $("#admin-add-assignment") as HTMLButtonElement;
+const elCancelAssignmentEdit = $("#admin-cancel-assignment-edit") as HTMLButtonElement;
 const elAssignmentList = $("#admin-assignment-list") as HTMLUListElement;
 const elHiddenMatch = $("#admin-hidden-match") as HTMLInputElement;
 const elAddFilter = $("#admin-add-filter") as HTMLButtonElement;
@@ -78,6 +79,10 @@ let providerCategoryOptions: LiveCategory[] = [];
 let selectedProviderCategoryId = "";
 let hls: Hls | null = null;
 let previewDebounceTimer: number | undefined;
+let editingAssignmentId: string | null = null;
+
+const ASSIGN_BTN_LABEL = "Assign to category";
+const ASSIGN_BTN_SAVE = "Save changes";
 
 function schedulePreviewSelected(): void {
   window.clearTimeout(previewDebounceTimer);
@@ -359,7 +364,7 @@ function syncAssignmentNameFromChannelPick(): void {
   elAssignmentName.value = s ? s.name : "";
 }
 
-function renderAssignCategorySelect(): void {
+function renderAssignCategorySelect(forceCategoryId?: string): void {
   const prevCategoryId = elChannelCategory.value;
   elChannelCategory.innerHTML = "";
   const sortedCountries = [...adminConfig.countries].sort((a, b) =>
@@ -387,8 +392,69 @@ function renderAssignCategorySelect(): void {
       elChannelCategory.appendChild(og);
     }
   }
-  if (prevCategoryId && validIds.has(prevCategoryId)) {
-    elChannelCategory.value = prevCategoryId;
+  const forced =
+    forceCategoryId !== undefined &&
+    forceCategoryId !== "" &&
+    validIds.has(forceCategoryId)
+      ? forceCategoryId
+      : "";
+  const prev = prevCategoryId && validIds.has(prevCategoryId) ? prevCategoryId : "";
+  const pick = forced || prev;
+  if (pick) elChannelCategory.value = pick;
+}
+
+function clearAssignmentEdit(): void {
+  editingAssignmentId = null;
+  elAddAssignment.textContent = ASSIGN_BTN_LABEL;
+  elCancelAssignmentEdit.classList.add("hidden");
+}
+
+function beginEditAssignment(a: AdminConfig["assignments"][0]): void {
+  editingAssignmentId = a.id;
+  elAssignmentName.value = a.match_text;
+  renderAssignCategorySelect(a.category_id);
+  elAddAssignment.textContent = ASSIGN_BTN_SAVE;
+  elCancelAssignmentEdit.classList.remove("hidden");
+  renderAssignmentList();
+  elAssignmentName.focus();
+  elAssignmentName.select();
+}
+
+function renderAssignmentList(): void {
+  elAssignmentList.innerHTML = "";
+  for (const a of adminConfig.assignments) {
+    const li = document.createElement("li");
+    if (a.id === editingAssignmentId) li.classList.add("admin-list-item--editing");
+    const label = document.createElement("span");
+    label.className = "admin-list-item__label";
+    label.textContent = `"${displayChannelName(a.match_text)}" → ${leafCategoryLabel(adminConfig, a.category_id)}`;
+    const actions = document.createElement("span");
+    actions.className = "admin-list-item__actions";
+    const btnEdit = document.createElement("button");
+    btnEdit.type = "button";
+    btnEdit.textContent = "Edit";
+    btnEdit.addEventListener("click", () => {
+      beginEditAssignment(a);
+    });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Delete";
+    btn.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await deleteAdminAssignment(a.id);
+          renderAdminLists();
+          adminStatus("Assignment deleted.");
+        } catch (e) {
+          adminStatus(e instanceof Error ? e.message : String(e), true);
+        }
+      })();
+    });
+    actions.appendChild(btnEdit);
+    actions.appendChild(btn);
+    li.appendChild(label);
+    li.appendChild(actions);
+    elAssignmentList.appendChild(li);
   }
 }
 
@@ -486,27 +552,7 @@ function renderAdminLists(): void {
   renderProviderCategorySelect();
   renderChannelPicker();
 
-  elAssignmentList.innerHTML = "";
-  for (const a of adminConfig.assignments) {
-    const li = document.createElement("li");
-    li.textContent = `"${displayChannelName(a.match_text)}" → ${leafCategoryLabel(adminConfig, a.category_id)}`;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Delete";
-    btn.addEventListener("click", () => {
-      void (async () => {
-        try {
-          await deleteAdminAssignment(a.id);
-          renderAdminLists();
-          adminStatus("Assignment deleted.");
-        } catch (e) {
-          adminStatus(e instanceof Error ? e.message : String(e), true);
-        }
-      })();
-    });
-    li.appendChild(btn);
-    elAssignmentList.appendChild(li);
-  }
+  renderAssignmentList();
 
   elFilterList.innerHTML = "";
   for (const f of adminConfig.hiddenFilters) {
@@ -638,7 +684,38 @@ async function addAdminAssignment(matchText: string, categoryId: string): Promis
   }
 }
 
+async function updateAdminAssignment(
+  id: string,
+  matchText: string,
+  categoryId: string
+): Promise<void> {
+  const trimmed = matchText.trim();
+  if (!trimmed || !categoryId) return;
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("admin_channel_rules")
+      .update({ match_text: trimmed, category_id: categoryId })
+      .eq("id", id)
+      .select("id,match_text,category_id")
+      .single();
+    if (error) throw error;
+    const idx = adminConfig.assignments.findIndex((a) => a.id === id);
+    if (idx >= 0) adminConfig.assignments[idx] = data as AdminConfig["assignments"][0];
+  } else {
+    const idx = adminConfig.assignments.findIndex((a) => a.id === id);
+    if (idx >= 0) {
+      adminConfig.assignments[idx] = {
+        id,
+        match_text: trimmed,
+        category_id: categoryId,
+      };
+    }
+    writeAdminConfigToLocalStorage(adminConfig);
+  }
+}
+
 async function deleteAdminAssignment(id: string): Promise<void> {
+  if (editingAssignmentId === id) clearAssignmentEdit();
   if (supabase) {
     const { error } = await supabase.from("admin_channel_rules").delete().eq("id", id);
     if (error) throw error;
@@ -742,7 +819,7 @@ elChannelSearch.addEventListener("input", () => {
 });
 
 elChannelPick.addEventListener("change", () => {
-  syncAssignmentNameFromChannelPick();
+  if (!editingAssignmentId) syncAssignmentNameFromChannelPick();
   schedulePreviewSelected();
 });
 
@@ -810,13 +887,26 @@ elAddAssignment.addEventListener("click", () => {
       return;
     }
     try {
-      await addAdminAssignment(matchText, elChannelCategory.value);
-      renderAdminLists();
-      adminStatus(`Assigned: ${displayChannelName(matchText)}`);
+      if (editingAssignmentId) {
+        await updateAdminAssignment(editingAssignmentId, matchText, elChannelCategory.value);
+        clearAssignmentEdit();
+        renderAdminLists();
+        adminStatus(`Updated: ${displayChannelName(matchText)}`);
+      } else {
+        await addAdminAssignment(matchText, elChannelCategory.value);
+        renderAdminLists();
+        adminStatus(`Assigned: ${displayChannelName(matchText)}`);
+      }
     } catch (e) {
       adminStatus(e instanceof Error ? e.message : String(e), true);
     }
   })();
+});
+
+elCancelAssignmentEdit.addEventListener("click", () => {
+  clearAssignmentEdit();
+  syncAssignmentNameFromChannelPick();
+  renderAdminLists();
 });
 
 elAddFilter.addEventListener("click", () => {

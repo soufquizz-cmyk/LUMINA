@@ -58,25 +58,25 @@
       </section>
 
       <main class="main main--velora hidden" id="main">
-        <header class="vel-header">
-          <div class="vel-brand">Velora<span>VIP</span></div>
-          <div class="vel-header__right">
-            <a href="/admin.html" class="vel-admin-link" title="Admin">Admin</a>
-            <select id="country-select" class="country-select" aria-label="Pays"></select>
-            <button type="button" id="btn-logout" class="vel-logout" title="Déconnexion">
-              Out
-            </button>
-          </div>
-        </header>
+        <div class="vel-sticky-top">
+          <header class="vel-header">
+            <div class="vel-brand">Velora<span>VIP</span></div>
+            <div class="vel-header__right">
+              <a href="/admin.html" class="vel-admin-link" title="Admin">Admin</a>
+              <select id="country-select" class="country-select" aria-label="Pays"></select>
+              <button type="button" id="btn-logout" class="vel-logout" title="Déconnexion">
+                Out
+              </button>
+            </div>
+          </header>
 
-        <div id="player-container" class="player-container hidden" aria-hidden="true">
-          <div class="video-wrapper">
-            <button type="button" id="btn-close-player" class="close-player" aria-label="Fermer le lecteur">
-              ✕
-            </button>
-            <video id="video" playsinline></video>
+          <div id="now-playing" class="player-now-playing vel-now-playing hidden" role="status" aria-live="polite"></div>
+
+          <div id="player-container" class="player-container hidden" aria-hidden="true">
+            <div class="video-wrapper">
+              <video id="video" controls playsinline></video>
+            </div>
           </div>
-          <div id="now-playing" class="player-now-playing vel-now-playing" role="status"></div>
         </div>
 
         <div class="vel-body">
@@ -95,19 +95,20 @@
           <div id="packages-view" class="grid vel-packages" aria-label="Bouquets"></div>
 
           <div id="content-view" class="hidden">
-            <button type="button" id="btn-back-home" class="back-btn">← RETOUR À L'ACCUEIL</button>
-            <div class="content-toolbar">
-              <div class="vel-search-wrap">
-                <span class="vel-search-icon" aria-hidden="true">⌕</span>
-                <input
-                  id="stream-filter"
-                  type="search"
-                  class="vel-search"
-                  placeholder="Rechercher une chaîne…"
-                  autocomplete="off"
-                />
-              </div>
-            </div>
+            <button type="button" id="btn-back-home" class="back-btn" title="Retour à l'accueil">
+              <span class="back-btn__icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path
+                    d="M14 6L8 12l6 6"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+              <span class="back-btn__text">Accueil</span>
+            </button>
             <div id="cat-pills-wrap" class="cat-pills-wrap vel-cat-pills-wrap hidden">
               <div id="cat-pills" class="vel-pills" role="tablist" aria-label="Filtres"></div>
             </div>

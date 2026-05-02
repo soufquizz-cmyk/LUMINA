@@ -1,6 +1,4 @@
 import Hls from "hls.js";
-import Plyr from "plyr";
-import "plyr/dist/plyr.css";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   assignmentCategoryIdForStreamName,
@@ -41,13 +39,11 @@ const elMain = $("#main") as HTMLElement;
 const elLoginPanel = document.querySelector(".login-panel") as HTMLElement;
 const elCatPills = $("#cat-pills") as HTMLDivElement;
 const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
-const elStreamFilter = $("#stream-filter") as HTMLInputElement;
 const elVideo = $("#video") as HTMLVideoElement;
 const elNowPlaying = $("#now-playing") as HTMLDivElement;
 const elBtnLogout = $("#btn-logout") as HTMLButtonElement;
 const elCountrySelect = $("#country-select") as HTMLSelectElement;
 const elPlayerContainer = $("#player-container") as HTMLElement;
-const elBtnClosePlayer = $("#btn-close-player") as HTMLButtonElement;
 const elMainTabs = $("#main-tabs") as HTMLElement;
 const elPackagesView = $("#packages-view") as HTMLDivElement;
 const elContentView = $("#content-view") as HTMLElement;
@@ -153,26 +149,7 @@ let state: {
 } | null = null;
 
 let hls: Hls | null = null;
-let plyrInstance: Plyr | null = null;
 let activeStreamId: number | null = null;
-
-/** Live IPTV: no scrub bar or speed menu (not meaningful for live HLS). */
-const PLYR_OPTIONS: Plyr.Options = {
-  controls: [
-    "play-large",
-    "play",
-    "current-time",
-    "mute",
-    "volume",
-    "pip",
-    "fullscreen",
-  ],
-  displayDuration: false,
-  fullscreen: { enabled: true, iosNative: true },
-  hideControls: true,
-  clickToPlay: true,
-  tooltips: { controls: true, seek: false },
-};
 
 function themeKeyForLabel(name: string): string {
   const n = name.toLowerCase();
@@ -199,16 +176,14 @@ function setTabsActive(tab: UiTab): void {
 function showPlayerChrome(show: boolean): void {
   elPlayerContainer.classList.toggle("hidden", !show);
   elPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
+  elNowPlaying.classList.toggle("hidden", !show);
+  elNowPlaying.setAttribute("aria-hidden", show ? "false" : "true");
 }
 
 function destroyPlayer(): void {
   if (hls) {
     hls.destroy();
     hls = null;
-  }
-  if (plyrInstance) {
-    plyrInstance.destroy();
-    plyrInstance = null;
   }
   elVideo.removeAttribute("src");
   elVideo.removeAttribute("title");
@@ -217,29 +192,19 @@ function destroyPlayer(): void {
   showPlayerChrome(false);
 }
 
-function initPlyr(): void {
-  if (plyrInstance) {
-    plyrInstance.destroy();
-    plyrInstance = null;
-  }
-  plyrInstance = new Plyr(elVideo, PLYR_OPTIONS);
-}
-
 function playUrl(url: string, label: string): void {
   destroyPlayer();
   const proxied = proxiedUrl(url);
-  elNowPlaying.innerHTML = `<strong>${escapeHtml(label)}</strong>`;
+  elNowPlaying.innerHTML = nowPlayingLiveMarkup(label);
   showPlayerChrome(true);
 
   if (elVideo.canPlayType("application/vnd.apple.mpegurl")) {
     elVideo.src = proxied;
-    initPlyr();
     void elVideo.play().catch(() => {});
     return;
   }
 
   if (Hls.isSupported()) {
-    initPlyr();
     hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
@@ -251,16 +216,17 @@ function playUrl(url: string, label: string): void {
     });
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (data.fatal) {
-        elNowPlaying.innerHTML = `<span class="error">Erreur lecture : ${escapeHtml(
-          data.type
-        )} / ${escapeHtml(String(data.details))}</span>`;
+        elNowPlaying.innerHTML = nowPlayingErrorMarkup(
+          `Erreur lecture : ${data.type} / ${String(data.details)}`
+        );
       }
     });
     return;
   }
 
-  elNowPlaying.innerHTML =
-    '<span class="error">HLS non pris en charge dans ce navigateur.</span>';
+  elNowPlaying.innerHTML = nowPlayingErrorMarkup(
+    "HLS non pris en charge dans ce navigateur."
+  );
 }
 
 function escapeHtml(s: string): string {
@@ -269,6 +235,22 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function nowPlayingLiveMarkup(title: string): string {
+  return `<div class="vel-live-ticker" role="status">
+  <div class="vel-live-ticker__meta">
+
+    <strong class="vel-live-ticker__title">${escapeHtml(title)}</strong>
+  </div>
+</div>`;
+}
+
+function nowPlayingErrorMarkup(message: string): string {
+  return `<div class="vel-live-ticker vel-live-ticker--error" role="alert">
+  <span class="vel-live-ticker__badge vel-live-ticker__badge--alert" aria-hidden="true">!</span>
+  <p class="vel-live-ticker__error">${escapeHtml(message)}</p>
+</div>`;
 }
 
 function setLoginStatus(msg: string, isError = false): void {
@@ -458,14 +440,7 @@ function renderCategoryPills(): void {
 function renderPackageChannelList(): void {
   if (!state || uiAdminPackageId == null) return;
   const base = streamsMatchedInPackage(uiAdminPackageId);
-  const afterPill = streamsAfterPill(base, selectedPillId, uiAdminPackageId);
-  const q = elStreamFilter.value.trim().toLowerCase();
-  const filtered = q
-    ? afterPill.filter((s) => {
-        const d = displayChannelName(s.name).toLowerCase();
-        return d.includes(q) || s.name.toLowerCase().includes(q);
-      })
-    : afterPill;
+  const filtered = streamsAfterPill(base, selectedPillId, uiAdminPackageId);
 
   elDynamicList.innerHTML = "";
 
@@ -502,13 +477,13 @@ function renderPackageChannelList(): void {
     info.className = "media-info";
     const h4 = document.createElement("h4");
     h4.textContent = displayChannelName(s.name);
-    const p = document.createElement("p");
-    const epgId = s.epg_channel_id;
-    p.textContent =
-      typeof epgId === "string" && epgId.trim() ? `EPG : ${epgId}` : "Direct HD";
-
     info.appendChild(h4);
-    info.appendChild(p);
+    const epgId = s.epg_channel_id;
+    if (typeof epgId === "string" && epgId.trim()) {
+      const p = document.createElement("p");
+      p.textContent = `EPG : ${epgId}`;
+      info.appendChild(p);
+    }
     btn.appendChild(thumb);
     btn.appendChild(info);
     btn.addEventListener("click", () => {
@@ -677,7 +652,6 @@ function openAdminPackage(packageId: string, packageName: string): void {
   elPackagesView.classList.add("hidden");
   elMainTabs.classList.add("hidden");
   elContentView.classList.remove("hidden");
-  elStreamFilter.value = "";
   selectedPillId = "all";
   syncPillDefsForPackage(packageId);
   renderCategoryPills();
@@ -694,7 +668,6 @@ function goHome(): void {
   elMainTabs.classList.remove("hidden");
   elContentView.classList.add("hidden");
   elCatPillsWrap.classList.add("hidden");
-  elStreamFilter.value = "";
   selectedPillId = "all";
   if (state) renderPackagesGrid();
 }
@@ -709,7 +682,6 @@ function showVodPlaceholder(kind: "movies" | "series"): void {
   elMainTabs.classList.remove("hidden");
   elContentView.classList.remove("hidden");
   elCatPillsWrap.classList.add("hidden");
-  elStreamFilter.value = "";
   elDynamicList.innerHTML = "";
   const msg = document.createElement("div");
   msg.className = "vel-empty-msg";
@@ -731,20 +703,23 @@ function onTabClick(tab: UiTab): void {
 async function playStreamByMode(s: LiveStream): Promise<void> {
   if (!state) return;
   if (state.mode === "nodecast") {
-    elNowPlaying.textContent = "Résolution du flux…";
+    showPlayerChrome(true);
+    elNowPlaying.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
     const resolved = await resolveNodecastStreamUrl(
       state.base,
       s,
       state.nodecastAuthHeaders
     );
     if (!resolved) {
-      elNowPlaying.innerHTML =
-        '<span class="error">Impossible de résoudre l’URL de cette chaîne (API Nodecast).</span>';
+      elNowPlaying.innerHTML = nowPlayingErrorMarkup(
+        "Impossible de résoudre l’URL de cette chaîne (API Nodecast)."
+      );
       return;
     }
     if (!sameOrigin(resolved, state.base)) {
-      elNowPlaying.innerHTML =
-        '<span class="error">URL de lecture externe bloquée ; proxy requis.</span>';
+      elNowPlaying.innerHTML = nowPlayingErrorMarkup(
+        "URL de lecture externe bloquée ; proxy requis."
+      );
       return;
     }
     s.direct_source = resolved;
@@ -826,7 +801,6 @@ function disconnect(): void {
   elDynamicList.innerHTML = "";
   elCatPills.innerHTML = "";
   elPackagesView.innerHTML = "";
-  elStreamFilter.value = "";
   elNowPlaying.textContent = "";
   elContentView.classList.add("hidden");
   elPackagesView.classList.remove("hidden");
@@ -876,18 +850,6 @@ elBtnBackHome.addEventListener("click", () => {
   }
 });
 
-elBtnClosePlayer.addEventListener("click", () => {
-  elVideo.pause();
-  elNowPlaying.textContent = "";
-  showPlayerChrome(false);
-});
-
-elStreamFilter.addEventListener("input", () => {
-  if (uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
-    renderPackageChannelList();
-  }
-});
-
 elTabLive.addEventListener("click", () => onTabClick("live"));
 elTabMovies.addEventListener("click", () => onTabClick("movies"));
 elTabSeries.addEventListener("click", () => onTabClick("series"));
@@ -897,6 +859,20 @@ elCountrySelect.addEventListener("change", onCountryChange);
 elServer.value = "http://5.180.180.198:3000";
 elUser.value = "samadoxal";
 elPass.value = "123456";
+
+/** Click on the picture (not the native control bar) toggles play / pause. */
+function toggleVideoPlayPause(ev: MouseEvent): void {
+  if (!hls && !elVideo.src && !elVideo.currentSrc) return;
+  const r = elVideo.getBoundingClientRect();
+  const y = ev.clientY - r.top;
+  const controlsReservePx = 52;
+  if (y > r.height - controlsReservePx) return;
+  ev.preventDefault();
+  if (elVideo.paused) void elVideo.play().catch(() => {});
+  else elVideo.pause();
+}
+
+elVideo.addEventListener("click", toggleVideoPlayPause);
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.activeElement?.closest(".login-panel")) {

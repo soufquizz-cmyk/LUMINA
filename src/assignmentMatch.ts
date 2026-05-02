@@ -1,5 +1,12 @@
 /** Shared channel label + admin rule matching (player + admin UI). */
 
+function assignmentExactMatchOnly(): boolean {
+  const v = import.meta.env?.VITE_ASSIGNMENT_EXACT_MATCH_ONLY;
+  if (v == null || v === "") return false;
+  const s = String(v).trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
+
 /** Strips common FR / country-style prefixes from catalogue titles for display and matching. */
 export function displayChannelName(raw: string): string {
   const s = raw
@@ -59,6 +66,8 @@ export function assignmentCategoryIdForStreamName(
       if (v === needle) return a.category_id;
     }
   }
+
+  if (assignmentExactMatchOnly()) return null;
 
   const byNeedleLen = [...assignments].sort(
     (a, b) =>

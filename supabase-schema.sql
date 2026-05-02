@@ -116,3 +116,24 @@ drop policy if exists "open read/write admin_channel_name_prefixes" on public.ad
 
 create policy "open read/write admin_channel_name_prefixes"
 on public.admin_channel_name_prefixes for all to anon, authenticated using (true) with check (true);
+
+-- Déplacements / masquage de chaînes par pays (ex. bouquets France : beIN, Canal, Disney).
+-- `target_package_id` = id du bouquet cible (UUID Supabase, id catégorie fournisseur, ou ids synthétiques
+-- velagg:fr:bein | velagg:fr:canal | velagg:fr:disney), ou la valeur littérale `hidden` pour masquer.
+create table if not exists public.admin_stream_curations (
+  id uuid primary key default gen_random_uuid(),
+  stream_id bigint not null,
+  country_id uuid not null references public.admin_countries (id) on delete cascade,
+  target_package_id text not null,
+  created_at timestamptz not null default now(),
+  unique (stream_id, country_id)
+);
+
+create index if not exists admin_stream_curations_country_id_idx on public.admin_stream_curations (country_id);
+
+alter table public.admin_stream_curations enable row level security;
+
+drop policy if exists "open read/write admin_stream_curations" on public.admin_stream_curations;
+
+create policy "open read/write admin_stream_curations"
+on public.admin_stream_curations for all to anon, authenticated using (true) with check (true);

@@ -1595,6 +1595,25 @@ a.topbar__admin-link {
   border-color: var(--vel-primary);
 }
 
+.vel-curate-status {
+  width: calc(100% - 2rem);
+  max-width: 56rem;
+  margin: 0.25rem auto 0;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  text-align: center;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: rgba(220, 252, 231, 0.95);
+}
+
+.vel-curate-status.vel-curate-status--error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: rgba(254, 226, 226, 0.96);
+}
+
 .country-select {
   /* Solid surface + dark color-scheme so the native dropdown isn’t light-on-light (Windows/Chrome). */
   background: var(--vel-surface);
@@ -2046,6 +2065,59 @@ a.topbar__admin-link {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.vel-media-item-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+}
+
+.vel-media-item-row .media-item__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.vel-media-item-tools {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px 6px 4px 0;
+}
+
+.vel-media-item-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: inherit;
+}
+
+.vel-media-item-tool:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.admin-channel-assign-dialog {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: calc(100vw - 2rem);
+}
+
+.admin-channel-assign-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
 }
 
 /* Now playing — au-dessus du player, texte sur le fond Velora (pas de panneau) */

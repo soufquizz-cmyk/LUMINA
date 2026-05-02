@@ -188,6 +188,8 @@
             </div>
           </header>
 
+          <p id="vel-curate-status" class="vel-curate-status hidden" role="status" aria-live="polite"></p>
+
           <div id="now-playing" class="player-now-playing vel-now-playing hidden" role="status" aria-live="polite"></div>
 
           <div id="player-container" class="player-container hidden" aria-hidden="true">
@@ -235,6 +237,24 @@
         </div>
       </main>
     </div>
+
+    <dialog id="dialog-channel-assign" class="admin-channel-assign-dialog">
+      <div class="admin-add-package-dialog__panel">
+        <h2 class="admin-add-package-dialog__title">Affecter la chaîne</h2>
+        <p class="admin-add-package-dialog__hint">
+          Choisissez un bouquet du pays actuel. La chaîne disparaît du bouquet d’origine pour tous les visiteurs.
+        </p>
+        <div class="field">
+          <label for="channel-assign-package">Bouquet</label>
+          <select id="channel-assign-package" class="admin-add-package-dialog__select"></select>
+        </div>
+        <p id="channel-assign-status" class="status" aria-live="polite"></p>
+        <div class="actions">
+          <button type="button" id="channel-assign-cancel" class="countries-admin-cancel">Annuler</button>
+          <button type="button" id="channel-assign-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </dialog>
 
     <dialog id="dialog-admin-add-package" class="admin-add-package-dialog">
       <div class="admin-add-package-dialog__panel">

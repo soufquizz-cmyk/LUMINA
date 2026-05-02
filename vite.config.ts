@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Match `VITE_PROXY_PREFIX` in `src/main.ts` (e.g. `/proxy.php` on Namecheap). */
 const PROXY_PREFIX = (process.env.VITE_PROXY_PREFIX ?? "/proxy").replace(/\/$/, "");
@@ -439,6 +443,15 @@ function proxyMiddleware() {
 }
 
 export default defineConfig({
+  envPrefix: ["VITE_", "NEXT_PUBLIC_"],
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        admin: path.resolve(__dirname, "admin.html"),
+      },
+    },
+  },
   server: {
     middlewareMode: false,
   },

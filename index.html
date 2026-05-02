@@ -1,16 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lumina Player</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>VeloraVIP Premium</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div class="app">
       <header class="header header--login-only">
         <h1>Xtream Codes Player</h1>
-        <p class="sub">Local proxy for API and streams (CORS).</p>
+        <p class="sub">Connexion Nodecast — proxy API et flux (CORS).</p>
       </header>
 
       <section class="panel login-panel">
@@ -18,153 +27,97 @@
           <div class="login-card__brand">
             <span class="login-card__play" aria-hidden="true">▶</span>
             <div>
-              <div class="login-card__title">LUMINA</div>
+              <div class="login-card__title">VELORA</div>
               <div class="login-card__tag">Premium IPTV</div>
             </div>
           </div>
           <div class="field">
-            <label for="server">Server URL</label>
+            <label for="server">URL du serveur</label>
             <input
               id="server"
               type="url"
-              placeholder="http://example.com:8080"
+              placeholder="http://exemple.com:8080"
               autocomplete="off"
             />
           </div>
           <div class="field row">
             <div>
-              <label for="user">Username</label>
+              <label for="user">Identifiant</label>
               <input id="user" type="text" autocomplete="username" />
             </div>
             <div>
-              <label for="pass">Password</label>
+              <label for="pass">Mot de passe</label>
               <input id="pass" type="password" autocomplete="current-password" />
             </div>
           </div>
           <div class="actions">
-            <button type="button" id="btn-connect" class="primary">Connect</button>
+            <button type="button" id="btn-connect" class="primary">Connexion</button>
             <span id="login-status" class="status" aria-live="polite"></span>
           </div>
         </div>
       </section>
 
-      <main class="main hidden" id="main">
-        <header class="topbar">
-          <div class="topbar__brand">
-            <span class="topbar__logo" aria-hidden="true">◆</span>
-            <span class="topbar__name">LUMINA</span>
-          </div>
-          <div class="topbar__search-wrap">
-            <span class="topbar__search-icon" aria-hidden="true">⌕</span>
-            <input
-              id="stream-filter"
-              type="search"
-              class="topbar__search"
-              placeholder="Search channels…"
-              autocomplete="off"
-            />
-          </div>
-          <div class="topbar__actions">
-            <button type="button" class="topbar__icon-btn" disabled title="Notifications" aria-label="Notifications">🔔</button>
-            <button type="button" class="topbar__icon-btn" disabled title="Cast" aria-label="Cast">📡</button>
-            <span class="topbar__avatar" title="Profile" aria-hidden="true"></span>
-            <button type="button" id="btn-logout" class="topbar__logout" title="Log out">Out</button>
+      <main class="main main--velora hidden" id="main">
+        <header class="vel-header">
+          <div class="vel-brand">Velora<span>VIP</span></div>
+          <div class="vel-header__right">
+            <a href="/admin.html" class="vel-admin-link" title="Admin">Admin</a>
+            <select id="country-select" class="country-select" aria-label="Pays"></select>
+            <button type="button" id="btn-logout" class="vel-logout" title="Déconnexion">
+              Out
+            </button>
           </div>
         </header>
 
-        <div class="layout-body">
-          <aside class="sidebar-nav" aria-label="App sections">
-            <nav class="sidebar-nav__list">
-              <button type="button" class="sidebar-nav__item" disabled title="Home">
-                <span class="sidebar-nav__ico" aria-hidden="true">⌂</span>
-                <span>Home</span>
-              </button>
-              <button type="button" class="sidebar-nav__item sidebar-nav__item--active" disabled>
-                <span class="sidebar-nav__ico" aria-hidden="true">▶</span>
-                <span>Live TV</span>
-              </button>
-              <button type="button" class="sidebar-nav__item" disabled title="Not in this build">
-                <span class="sidebar-nav__ico" aria-hidden="true">▣</span>
-                <span>Movies</span>
-              </button>
-              <button type="button" class="sidebar-nav__item" disabled title="Not in this build">
-                <span class="sidebar-nav__ico" aria-hidden="true">☰</span>
-                <span>Series</span>
-              </button>
-              <button type="button" class="sidebar-nav__item" disabled title="Not in this build">
-                <span class="sidebar-nav__ico" aria-hidden="true">♡</span>
-                <span>Library</span>
-              </button>
-              <button type="button" class="sidebar-nav__item" disabled title="Not in this build">
-                <span class="sidebar-nav__ico" aria-hidden="true">⚙</span>
-                <span>Settings</span>
-              </button>
-            </nav>
-            <div class="sidebar-premium">
-              <div class="sidebar-premium__title">Premium plan</div>
-              <div class="sidebar-premium__name">Lumina TV Ultra</div>
-              <button type="button" class="sidebar-premium__btn" disabled>Upgrade now</button>
+        <div id="player-container" class="player-container hidden" aria-hidden="true">
+          <div class="video-wrapper">
+            <button type="button" id="btn-close-player" class="close-player" aria-label="Fermer le lecteur">
+              ✕
+            </button>
+            <video id="video" controls playsinline></video>
+            <div class="player-overlay">
+              <span class="play-icon" aria-hidden="true">▶</span>
+              <span id="player-status">En lecture</span>
             </div>
-          </aside>
-
-          <div class="layout-main">
-            <div class="hero-row">
-              <section class="player-col" aria-label="Player">
-                <div class="player-shell">
-                  <div class="player-frame">
-                    <video id="video" controls playsinline></video>
-                  </div>
-                  <div class="player-dock">
-                    <div class="player-dock__live">
-                      <span class="player-dock__dot" aria-hidden="true"></span>
-                      <span class="player-dock__label">LIVE NOW</span>
-                      <span id="player-now-title" class="player-dock__title">Select a channel</span>
-                    </div>
-                    <div class="player-dock__actions">
-                      <button type="button" class="dock-btn" disabled>Guide</button>
-                      <button type="button" class="dock-btn" disabled>Recent</button>
-                    </div>
-                  </div>
-                </div>
-                <div id="now-playing" class="now-playing" role="status"></div>
-              </section>
-
-              <aside class="channel-drawer" aria-label="Channels">
-                <div class="channel-drawer__head">
-                  <h2 class="channel-drawer__title">Channels</h2>
-                  <span id="channel-count" class="channel-drawer__badge">0</span>
-                  <button type="button" class="channel-drawer__filter" disabled aria-hidden="true">⚙</button>
-                </div>
-                <ul id="stream-list" class="stream-list"></ul>
-              </aside>
-            </div>
-
-            <div class="cat-pills-wrap">
-              <div id="cat-pills" class="cat-pills" role="tablist" aria-label="Categories"></div>
-            </div>
-
-            <section class="live-now-strip" aria-label="Live now">
-              <div class="live-now-strip__head">
-                <h3 class="live-now-strip__title">Live now</h3>
-              </div>
-              <div class="live-now-strip__row">
-                <p class="live-now-strip__empty">
-                  EPG thumbnails appear here when a program guide is connected.
-                </p>
-              </div>
-            </section>
-
-            <section class="program-guide" aria-label="Program guide">
-              <div class="program-guide__head">
-                <button type="button" class="program-guide__nav" disabled aria-hidden="true">‹</button>
-                <h3 class="program-guide__title">Program guide</h3>
-                <button type="button" class="program-guide__nav" disabled aria-hidden="true">›</button>
-              </div>
-              <div class="program-guide__placeholder">
-                <p>No EPG loaded. Channels and playback still work from the list on the right.</p>
-              </div>
-            </section>
           </div>
+        </div>
+
+        <div class="vel-body">
+          <div class="nav-tabs" id="main-tabs" role="tablist">
+            <button type="button" class="tab active" id="tab-live" data-tab="live" role="tab">
+              DIRECT TV
+            </button>
+            <button type="button" class="tab" id="tab-movies" data-tab="movies" role="tab">
+              FILMS
+            </button>
+            <button type="button" class="tab" id="tab-series" data-tab="series" role="tab">
+              SÉRIES
+            </button>
+          </div>
+
+          <div id="packages-view" class="grid vel-packages" aria-label="Bouquets"></div>
+
+          <div id="content-view" class="hidden">
+            <button type="button" id="btn-back-home" class="back-btn">← RETOUR À L'ACCUEIL</button>
+            <div class="content-toolbar">
+              <div class="vel-search-wrap">
+                <span class="vel-search-icon" aria-hidden="true">⌕</span>
+                <input
+                  id="stream-filter"
+                  type="search"
+                  class="vel-search"
+                  placeholder="Rechercher une chaîne…"
+                  autocomplete="off"
+                />
+              </div>
+            </div>
+            <div id="cat-pills-wrap" class="cat-pills-wrap vel-cat-pills-wrap hidden">
+              <div id="cat-pills" class="vel-pills" role="tablist" aria-label="Filtres"></div>
+            </div>
+            <div class="item-list" id="dynamic-list"></div>
+          </div>
+
+          <div id="now-playing" class="now-playing vel-now-playing" role="status"></div>
         </div>
       </main>
     </div>

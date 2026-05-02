@@ -1,21 +1,25 @@
 import Hls from "hls.js";
-
-type LiveCategory = {
-  category_id: string;
-  category_name: string;
-  parent_id: number;
-};
-
-type LiveStream = {
-  stream_id: number;
-  name: string;
-  category_id?: string | number;
-  stream_icon?: string;
-  epg_channel_id?: string | null;
-  direct_source?: string;
-  nodecast_channel_id?: string;
-  nodecast_source_id?: string;
-};
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  assignmentCategoryIdForStreamName,
+  displayChannelName,
+} from "./assignmentMatch";
+import {
+  type AdminCategory,
+  type AdminConfig,
+  type AdminCountry,
+  type AdminPackage,
+  EMPTY_ADMIN_CONFIG,
+  readAdminConfigFromLocalStorage,
+} from "./adminHierarchyConfig";
+import {
+  type LiveStream,
+  tryNodecastLoginAndLoad,
+  resolveNodecastStreamUrl,
+  proxiedUrl,
+  normalizeServerInput,
+  sameOrigin,
+} from "./nodecastCatalog";
 
 type ServerInfo = {
   url: string;
@@ -24,16 +28,7 @@ type ServerInfo = {
   server_protocol?: string;
 };
 
-type ProxiedRequestInit = {
-  method?: "GET" | "POST";
-  headers?: Record<string, string>;
-  body?: string;
-};
-
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel);
-
-/** Production shared hosting: set `VITE_PROXY_PREFIX=/proxy.php` at build time, or use /.htaccess rewrite `^proxy$` → `proxy.php`. */
-const PROXY_PREFIX = (import.meta.env.VITE_PROXY_PREFIX ?? "/proxy").replace(/\/$/, "");
 
 const elServer = $("#server") as HTMLInputElement;
 const elUser = $("#user") as HTMLInputElement;
@@ -43,50 +38,77 @@ const elLoginStatus = $("#login-status") as HTMLSpanElement;
 const elMain = $("#main") as HTMLElement;
 const elLoginPanel = document.querySelector(".login-panel") as HTMLElement;
 const elCatPills = $("#cat-pills") as HTMLDivElement;
-const elStreamList = $("#stream-list") as HTMLUListElement;
+const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
 const elStreamFilter = $("#stream-filter") as HTMLInputElement;
 const elVideo = $("#video") as HTMLVideoElement;
 const elNowPlaying = $("#now-playing") as HTMLDivElement;
-const elChannelCount = $("#channel-count") as HTMLSpanElement;
-const elPlayerBarTitle = $("#player-now-title") as HTMLSpanElement;
 const elBtnLogout = $("#btn-logout") as HTMLButtonElement;
+const elCountrySelect = $("#country-select") as HTMLSelectElement;
+const elPlayerContainer = $("#player-container") as HTMLElement;
+const elBtnClosePlayer = $("#btn-close-player") as HTMLButtonElement;
+const elPlayerStatus = $("#player-status") as HTMLSpanElement;
+const elMainTabs = $("#main-tabs") as HTMLElement;
+const elPackagesView = $("#packages-view") as HTMLDivElement;
+const elContentView = $("#content-view") as HTMLElement;
+const elDynamicList = $("#dynamic-list") as HTMLDivElement;
+const elBtnBackHome = $("#btn-back-home") as HTMLButtonElement;
+const elTabLive = $("#tab-live") as HTMLButtonElement;
+const elTabMovies = $("#tab-movies") as HTMLButtonElement;
+const elTabSeries = $("#tab-series") as HTMLButtonElement;
 
-type PillId = (typeof PILL_DEFS)[number]["id"];
+type PillId = string;
 
-const PILL_DEFS = [
-  { id: "all", label: "All" },
-  { id: "sports", label: "Sports" },
-  { id: "news", label: "News" },
-  { id: "movies", label: "Movies" },
-  { id: "kids", label: "Kids" },
-  { id: "documentary", label: "Documentary" },
-] as const;
+const ALL_PILL = { id: "all", label: "Tout" } as const;
 
 let selectedPillId: PillId = "all";
+let pillDefs: Array<{ id: string; label: string }> = [ALL_PILL];
 
-function normalizeServerInput(raw: string): string {
-  let s = raw.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(s)) {
-    s = `http://${s}`;
-  }
-  return s;
-}
+let adminConfig: AdminConfig = { ...EMPTY_ADMIN_CONFIG };
 
-function sameOrigin(a: string, b: string): boolean {
-  try {
-    return new URL(a).origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
-}
+type UiTab = "live" | "movies" | "series";
+type UiShell = "packages" | "content";
 
-/** `from` = playlist / page URL for upstream Referer (hotlink checks). */
-function proxiedUrl(target: string, fromPlaylist?: string): string {
-  const p = new URLSearchParams();
-  p.set("target", target);
-  p.set("from", fromPlaylist ?? target);
-  return `${PROXY_PREFIX}?${p.toString()}`;
-}
+let uiTab: UiTab = "live";
+let uiShell: UiShell = "packages";
+/** When in live TV content view, which admin package (grid card) is open. */
+let uiAdminPackageId: string | null = null;
+/** Selected country from `admin_countries` (database). */
+let selectedAdminCountryId: string | null = null;
+
+const COUNTRY_STORAGE_KEY = "lumina_selected_country_id";
+
+const THEMES: Record<string, { bg: string; surface: string; primary: string; glow: string }> = {
+  default: {
+    bg: "#06050a",
+    surface: "#110f1a",
+    primary: "#8A2BE2",
+    glow: "rgba(138, 43, 226, 0.3)",
+  },
+  canal: {
+    bg: "#000000",
+    surface: "#1a1a1a",
+    primary: "#ffffff",
+    glow: "rgba(255, 255, 255, 0.25)",
+  },
+  bein: {
+    bg: "#2b0c3d",
+    surface: "#3a1451",
+    primary: "#d40062",
+    glow: "rgba(212, 0, 98, 0.35)",
+  },
+  disney: {
+    bg: "#001a4d",
+    surface: "#002673",
+    primary: "#00e6ff",
+    glow: "rgba(0, 230, 255, 0.3)",
+  },
+};
+
+const supabaseUrl = import.meta.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env
+  .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+const supabase: SupabaseClient | null =
+  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 function resolvedIconUrl(raw: string | undefined, base: string): string | null {
   const s = raw?.trim();
@@ -95,52 +117,6 @@ function resolvedIconUrl(raw: string | undefined, base: string): string | null {
     return /^https?:\/\//i.test(s) ? s : new URL(s, base).href;
   } catch {
     return null;
-  }
-}
-
-const FETCH_TIMEOUT_MS = 90_000;
-
-/** Same upstream URL → same Nodecast transcode session; avoid duplicate POSTs (log spam + extra load). */
-const TRANSCODE_CACHE_MS = 3 * 60 * 1000;
-const transcodePlaylistCache = new Map<string, { expires: number; playlistUrl: string }>();
-const transcodeInflight = new Map<string, Promise<string | null>>();
-
-async function fetchProxiedJson<T>(url: string): Promise<T> {
-  return fetchProxiedJsonWithInit<T>(url);
-}
-
-async function fetchProxiedJsonWithInit<T>(
-  url: string,
-  init: ProxiedRequestInit = {}
-): Promise<T> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
-  let r: Response;
-  try {
-    r = await fetch(proxiedUrl(url), {
-      signal: ac.signal,
-      method: init.method ?? "GET",
-      headers: init.headers,
-      body: init.body,
-    });
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") {
-      throw new Error(
-        `Request timed out after ${FETCH_TIMEOUT_MS / 1000}s. Check the server URL and your network.`
-      );
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
-  const text = (await r.text()).replace(/^\uFEFF/, "");
-  if (!r.ok) {
-    throw new Error(text.slice(0, 400) || r.statusText);
-  }
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Invalid JSON from server (wrong URL or blocked response).");
   }
 }
 
@@ -155,7 +131,7 @@ function buildLiveStreamUrl(
   const host = String(server.url).replace(/^\/+/, "");
   const useHttps = protocol === "https";
   const port = String(
-    (useHttps && server.https_port != null && server.https_port !== "")
+    useHttps && server.https_port != null && server.https_port !== ""
       ? server.https_port
       : server.port || ""
   );
@@ -171,12 +147,39 @@ let state: {
   password: string;
   nodecastAuthHeaders?: Record<string, string>;
   serverInfo: ServerInfo;
-  categories: LiveCategory[];
-  streamsByCat: Map<string, LiveStream[]>;
+  /** Full provider catalog (used only to resolve streams matched by admin rules). */
+  streamsByCatAll: Map<string, LiveStream[]>;
 } | null = null;
 
 let hls: Hls | null = null;
 let activeStreamId: number | null = null;
+
+function themeKeyForLabel(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("canal")) return "canal";
+  if (n.includes("bein")) return "bein";
+  if (n.includes("disney")) return "disney";
+  return "default";
+}
+
+function applyTheme(key: string): void {
+  const t = THEMES[key] || THEMES.default;
+  elMain.style.setProperty("--vel-bg", t.bg);
+  elMain.style.setProperty("--vel-surface", t.surface);
+  elMain.style.setProperty("--vel-primary", t.primary);
+  elMain.style.setProperty("--vel-accent-glow", t.glow);
+}
+
+function setTabsActive(tab: UiTab): void {
+  elTabLive.classList.toggle("active", tab === "live");
+  elTabMovies.classList.toggle("active", tab === "movies");
+  elTabSeries.classList.toggle("active", tab === "series");
+}
+
+function showPlayerChrome(show: boolean): void {
+  elPlayerContainer.classList.toggle("hidden", !show);
+  elPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
+}
 
 function destroyPlayer(): void {
   if (hls) {
@@ -185,14 +188,16 @@ function destroyPlayer(): void {
   }
   elVideo.removeAttribute("src");
   elVideo.load();
-  elPlayerBarTitle.textContent = "Select a channel";
+  elPlayerStatus.textContent = "—";
+  showPlayerChrome(false);
 }
 
 function playUrl(url: string, label: string): void {
   destroyPlayer();
   const proxied = proxiedUrl(url);
-  elPlayerBarTitle.textContent = label;
-  elNowPlaying.innerHTML = `Playing: <strong>${escapeHtml(label)}</strong>`;
+  elPlayerStatus.textContent = label;
+  elNowPlaying.innerHTML = `Lecture : <strong>${escapeHtml(label)}</strong>`;
+  showPlayerChrome(true);
 
   if (elVideo.canPlayType("application/vnd.apple.mpegurl")) {
     elVideo.src = proxied;
@@ -212,8 +217,8 @@ function playUrl(url: string, label: string): void {
     });
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (data.fatal) {
-        elPlayerBarTitle.textContent = "Playback error";
-        elNowPlaying.innerHTML = `<span class="error">Playback error: ${escapeHtml(
+        elPlayerStatus.textContent = "Erreur lecture";
+        elNowPlaying.innerHTML = `<span class="error">Erreur : ${escapeHtml(
           data.type
         )} / ${escapeHtml(String(data.details))}</span>`;
       }
@@ -222,7 +227,7 @@ function playUrl(url: string, label: string): void {
   }
 
   elNowPlaying.innerHTML =
-    '<span class="error">HLS not supported in this browser.</span>';
+    '<span class="error">HLS non pris en charge dans ce navigateur.</span>';
 }
 
 function escapeHtml(s: string): string {
@@ -233,64 +238,119 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Strip common `FR -` / `FR |` style prefixes from list and player labels. */
-function displayChannelName(raw: string): string {
-  const s = raw
-    .replace(/^\s*(?:\[FR\]\s*|FR\s*[-–—|]\s*|FR\s*:\s+)/i, "")
-    .trim();
-  return s.length ? s : raw.trim();
-}
-
-/** Hide noisy placeholder channels like "##### FR DAZN PPV #####". */
-function isHiddenDecorativeChannel(rawName: string): boolean {
-  const n = rawName.trim();
-  if (!n) return true;
-  if (/#{4,}/.test(n)) return true;
-  if (/^[#\-\s_]+$/.test(n)) return true;
-  return false;
-}
-
 function setLoginStatus(msg: string, isError = false): void {
   elLoginStatus.textContent = msg;
   elLoginStatus.classList.toggle("error", isError);
 }
 
-function groupStreamsByCategory(streams: LiveStream[]): Map<string, LiveStream[]> {
-  const map = new Map<string, LiveStream[]>();
-  for (const s of streams) {
-    const cid = s.category_id != null ? String(s.category_id) : "";
-    if (!cid) continue;
-    const list = map.get(cid);
-    if (list) list.push(s);
-    else map.set(cid, [s]);
+function syncPillDefsForPackage(packageId: string): void {
+  const leaves = adminConfig.categories
+    .filter((c) => c.package_id === packageId)
+    .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  pillDefs = [
+    ALL_PILL,
+    ...leaves.map((c) => ({ id: `custom:${c.id}`, label: c.name })),
+  ];
+  if (!pillDefs.some((p) => p.id === selectedPillId)) {
+    selectedPillId = "all";
   }
-  return map;
 }
 
-/** Category pills: only names containing "france" (case-insensitive). */
-function categoryNameIncludesFrance(c: LiveCategory): boolean {
-  return c.category_name.toLowerCase().includes("france");
+function normalizeAdminId(id: string): string {
+  return id.trim().toLowerCase();
 }
 
-function filterCategoriesAndStreamsToFrance(
-  cats: LiveCategory[],
-  streamsByCat: Map<string, LiveStream[]>
-): { categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } {
-  const categories = cats.filter(categoryNameIncludesFrance);
-  const next = new Map<string, LiveStream[]>();
-  for (const c of categories) {
-    const id = String(c.category_id);
-    next.set(id, streamsByCat.get(id) ?? []);
-  }
-  return { categories, streamsByCat: next };
+/** Leaf category ids for this package (normalized for stable UUID compares). */
+function leafCategoryIdSetForPackage(packageId: string): Set<string> {
+  const pid = normalizeAdminId(packageId);
+  return new Set(
+    adminConfig.categories
+      .filter((c) => normalizeAdminId(c.package_id) === pid)
+      .map((c) => normalizeAdminId(c.id))
+  );
 }
 
-function categoryNameById(categories: LiveCategory[]): Map<string, string> {
-  const m = new Map<string, string>();
-  for (const c of categories) {
-    m.set(String(c.category_id), c.category_name);
+/** Channel rules that target a leaf category inside this package only. */
+function assignmentsForPackageLeaves(leafIds: Set<string>): AdminConfig["assignments"] {
+  return adminConfig.assignments.filter((a) => leafIds.has(normalizeAdminId(a.category_id)));
+}
+
+/**
+ * Which leaf category this stream belongs to **for this bouquet only**, using rules
+ * scoped to that package. Avoids another package’s rule matching the same name first
+ * and hiding channels here.
+ */
+function ruleCategoryForStreamInPackage(streamName: string, packageId: string): string | null {
+  const leafIds = leafCategoryIdSetForPackage(packageId);
+  if (leafIds.size === 0) return null;
+  const scoped = assignmentsForPackageLeaves(leafIds);
+  const aid = assignmentCategoryIdForStreamName(streamName, scoped);
+  if (aid == null) return null;
+  return leafIds.has(normalizeAdminId(aid)) ? aid : null;
+}
+
+function isHiddenByAdminFilter(name: string): boolean {
+  const n = name.toLowerCase();
+  return adminConfig.hiddenFilters.some((f) => {
+    const needle = f.needle.trim().toLowerCase();
+    return needle && n.includes(needle);
+  });
+}
+
+function loadAdminFromLocalStorage(): void {
+  adminConfig = readAdminConfigFromLocalStorage();
+}
+
+async function loadAdminConfig(): Promise<void> {
+  if (!supabase) {
+    loadAdminFromLocalStorage();
+    return;
   }
-  return m;
+  try {
+    const [ctryRes, pkgRes, catRes, rulesRes, filtersRes] = await Promise.all([
+      supabase.from("admin_countries").select("id,name").order("name", { ascending: true }),
+      supabase
+        .from("admin_packages")
+        .select("id,country_id,name")
+        .order("name", { ascending: true }),
+      supabase
+        .from("admin_categories")
+        .select("id,package_id,name")
+        .order("name", { ascending: true }),
+      supabase
+        .from("admin_channel_rules")
+        .select("id,match_text,category_id")
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("admin_hidden_filters")
+        .select("id,needle")
+        .order("created_at", { ascending: true }),
+    ]);
+    if (
+      ctryRes.error ||
+      pkgRes.error ||
+      catRes.error ||
+      rulesRes.error ||
+      filtersRes.error
+    ) {
+      throw (
+        ctryRes.error ||
+        pkgRes.error ||
+        catRes.error ||
+        rulesRes.error ||
+        filtersRes.error
+      );
+    }
+    adminConfig = {
+      countries: (ctryRes.data ?? []) as AdminCountry[],
+      packages: (pkgRes.data ?? []) as AdminPackage[],
+      categories: (catRes.data ?? []) as AdminCategory[],
+      assignments: (rulesRes.data ?? []) as AdminConfig["assignments"],
+      hiddenFilters: (filtersRes.data ?? []) as AdminConfig["hiddenFilters"],
+    };
+  } catch {
+    loadAdminFromLocalStorage();
+  }
 }
 
 function allStreamsDeduped(streamsByCat: Map<string, LiveStream[]>): LiveStream[] {
@@ -303,575 +363,44 @@ function allStreamsDeduped(streamsByCat: Map<string, LiveStream[]>): LiveStream[
   return [...seen.values()];
 }
 
-function streamHaystack(s: LiveStream, catNames: Map<string, string>): string {
-  const cid = s.category_id != null ? String(s.category_id) : "";
-  const cat = (cid && catNames.get(cid)) || "";
-  return `${s.name} ${cat}`.toLowerCase();
+/** Streams from the provider that are assigned (rules) to a leaf category inside this package. */
+function streamsMatchedInPackage(packageId: string): LiveStream[] {
+  if (!state) return [];
+  const leafIds = leafCategoryIdSetForPackage(packageId);
+  if (leafIds.size === 0) return [];
+  const pool = allStreamsDeduped(state.streamsByCatAll).filter((s) => !isHiddenByAdminFilter(s.name));
+  return pool.filter((s) => ruleCategoryForStreamInPackage(s.name, packageId) != null);
 }
 
-function streamMatchesGenrePill(hay: string, pillId: Exclude<PillId, "all">): boolean {
-  switch (pillId) {
-    case "sports":
-      return /sport|football|soccer|foot\b|rugby|f1\b|formula|ligue|uefa|nba|nfl|nhl|mlb|tennis|golf|match|stadium|olymp|bein|eurosport|dazn|motogp|cyclisme|volley|handball|hockey|mma|boxe|catch|ipl|cricket|arena|rmc\s*sp|eleven|canal\+\s*sp/i.test(
-        hay
-      );
-    case "news":
-      return /news|info\b|actu|actualit|bfm|lci|cnews|franceinfo|euronews|cnn|bbc\b|i24|rtl\b|journal|politique|parlement|assembly|bloomberg|sky\s*news|msnbc|fox\s*news|al\s*jazeera|france\s*24/i.test(
-        hay
-      );
-    case "movies":
-      return /cin[eé]ma|cinema|\bfilm\b|movie|vod|hollywood|oscar|paramount|warner|mgm|hbo\b|netflix|prime\s*vid|amazon\s*stud/i.test(
-        hay
-      );
-    case "kids":
-      return /kid|enfant|junior|cartoon|disney|nickelodeon|boomerang|gulli|tiji|piwi|baby|teen|duck|rubika|yoyo|babar|peppa|paw\s*patrol|spongebob|minuscule/i.test(
-        hay
-      );
-    case "documentary":
-      return /document|docu|discovery|nat\s*geo|national\s*geo|animal\s*planet|science\b|histoire|arte\b|ushua[iï]a|museum|wildlife|plan[eè]te|geo\b|investigation|enqu[eê]te/i.test(
-        hay
-      );
-    default:
-      return false;
+function streamsAfterPill(base: LiveStream[], pillId: PillId, packageId: string): LiveStream[] {
+  if (pillId === "all") return base;
+  if (pillId.startsWith("custom:")) {
+    const customId = pillId.slice("custom:".length);
+    const want = normalizeAdminId(customId);
+    return base.filter(
+      (s) => normalizeAdminId(ruleCategoryForStreamInPackage(s.name, packageId) ?? "") === want
+    );
   }
-}
-
-function streamsForPill(
-  streamsByCat: Map<string, LiveStream[]>,
-  categories: LiveCategory[],
-  pillId: PillId
-): LiveStream[] {
-  const all = allStreamsDeduped(streamsByCat);
-  if (pillId === "all") return all;
-  const catNames = categoryNameById(categories);
-  return all.filter((s) => streamMatchesGenrePill(streamHaystack(s, catNames), pillId));
-}
-
-function asArray(payload: unknown): unknown[] {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== "object") return [];
-  const o = payload as Record<string, unknown>;
-  if (Array.isArray(o.channels)) return o.channels;
-  if (Array.isArray(o.data)) return o.data;
-  if (Array.isArray(o.items)) return o.items;
-  if (Array.isArray(o.results)) return o.results;
   return [];
 }
 
-function looksLikeMediaUrl(v: string): boolean {
-  return /^https?:\/\//i.test(v) && /(\.m3u8|\.mpd|\.ts|\/live\/|\/hls\/|\/stream\/)/i.test(v);
-}
-
-function extractStreamUrlDeep(payload: unknown): string | null {
-  if (typeof payload === "string") {
-    const trimmed = payload.trim();
-    return looksLikeMediaUrl(trimmed) ? trimmed : null;
+function updatePillsVisibility(): void {
+  const show = uiShell === "content" && uiTab === "live" && uiAdminPackageId != null;
+  if (!show) {
+    elCatPillsWrap.classList.add("hidden");
+    return;
   }
-  if (!payload || typeof payload !== "object") return null;
-  if (Array.isArray(payload)) {
-    for (const item of payload) {
-      const hit = extractStreamUrlDeep(item);
-      if (hit) return hit;
-    }
-    return null;
-  }
-
-  const obj = payload as Record<string, unknown>;
-  const preferredKeys = [
-    "stream_url",
-    "playback_url",
-    "hls_url",
-    "url",
-    "direct_source",
-    "stream",
-    "play_url",
-  ];
-  for (const k of preferredKeys) {
-    const v = obj[k];
-    if (typeof v === "string") {
-      const trimmed = v.trim();
-      if (looksLikeMediaUrl(trimmed)) return trimmed;
-    }
-  }
-  for (const v of Object.values(obj)) {
-    const hit = extractStreamUrlDeep(v);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-function extractTokenDeep(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  if (Array.isArray(payload)) {
-    for (const item of payload) {
-      const t = extractTokenDeep(item);
-      if (t) return t;
-    }
-    return null;
-  }
-  const o = payload as Record<string, unknown>;
-  const directKeys = ["token", "access_token", "accessToken", "jwt", "bearer"];
-  for (const k of directKeys) {
-    const v = o[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  for (const v of Object.values(o)) {
-    const t = extractTokenDeep(v);
-    if (t) return t;
-  }
-  return null;
-}
-
-function isLikelyM3u8Body(text: string): boolean {
-  return text.trimStart().startsWith("#EXTM3U");
-}
-
-/** Nodecast POST /api/transcode/session returns `{ playlistUrl: "/api/transcode/:id/stream.m3u8", ... }`. */
-function playlistUrlFromNodecastTranscodeResponse(
-  payload: unknown,
-  nodecastBase: string
-): string | null {
-  if (!payload || typeof payload !== "object") return null;
-  const o = payload as Record<string, unknown>;
-  const rel = o.playlistUrl;
-  if (typeof rel !== "string" || !rel.includes("m3u8")) return null;
-  try {
-    const u = new URL(rel.trim(), nodecastBase);
-    if (u.origin !== new URL(nodecastBase).origin) return null;
-    return u.href;
-  } catch {
-    return null;
-  }
-}
-
-async function createNodecastTranscodeUrl(
-  nodecastBase: string,
-  upstreamUrl: string,
-  headers?: Record<string, string>
-): Promise<string | null> {
-  const now = Date.now();
-  const cached = transcodePlaylistCache.get(upstreamUrl);
-  if (cached && cached.expires > now) {
-    return cached.playlistUrl;
-  }
-
-  let inflight = transcodeInflight.get(upstreamUrl);
-  if (inflight) {
-    return inflight;
-  }
-
-  inflight = (async (): Promise<string | null> => {
-    console.debug("[nodecast] create transcode session for", upstreamUrl);
-    try {
-      await fetchProxiedJsonWithInit<unknown>(
-        `${nodecastBase}/api/probe?url=${encodeURIComponent(upstreamUrl)}`,
-        { headers }
-      );
-    } catch {
-      // optional warm-up
-    }
-
-    const postHeaders: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(headers ?? {}),
-    };
-    const postBody = JSON.stringify({ url: upstreamUrl });
-    const sessionUrl = `${nodecastBase}/api/transcode/session`;
-
-    for (let round = 0; round < 2; round++) {
-      if (round > 0) {
-        await new Promise((r) => setTimeout(r, 2800));
-      }
-      try {
-        const payload = await fetchProxiedJsonWithInit<unknown>(sessionUrl, {
-          method: "POST",
-          headers: postHeaders,
-          body: postBody,
-        });
-        const fromPlaylist = playlistUrlFromNodecastTranscodeResponse(payload, nodecastBase);
-        if (fromPlaylist) {
-          transcodePlaylistCache.set(upstreamUrl, {
-            expires: Date.now() + TRANSCODE_CACHE_MS,
-            playlistUrl: fromPlaylist,
-          });
-          console.debug("[nodecast] transcode session playlist", fromPlaylist);
-          return fromPlaylist;
-        }
-        const resolved = extractStreamUrlDeep(payload);
-        if (resolved) {
-          const u = new URL(resolved, nodecastBase);
-          if (u.origin === new URL(nodecastBase).origin) {
-            transcodePlaylistCache.set(upstreamUrl, {
-              expires: Date.now() + TRANSCODE_CACHE_MS,
-              playlistUrl: u.href,
-            });
-            return u.href;
-          }
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const isPlaylistTimeout = msg.includes("Playlist not generated in time");
-        console.debug("[nodecast] transcode session failed", msg.slice(0, 200));
-        if (!isPlaylistTimeout || round === 1) {
-          break;
-        }
-      }
-    }
-    return null;
-  })().finally(() => {
-    transcodeInflight.delete(upstreamUrl);
-  });
-
-  transcodeInflight.set(upstreamUrl, inflight);
-  return inflight;
-}
-
-async function resolveCandidateToPlayableUrl(
-  candidate: string,
-  headers?: Record<string, string>
-): Promise<string | null> {
-  try {
-    const r = await fetch(proxiedUrl(candidate), { method: "GET", headers });
-    if (!r.ok) return null;
-    const ct = (r.headers.get("content-type") || "").toLowerCase();
-    const body = await r.text();
-
-    if (ct.includes("application/vnd.apple.mpegurl") || ct.includes("application/x-mpegurl")) {
-      return isLikelyM3u8Body(body) ? candidate : null;
-    }
-    if (isLikelyM3u8Body(body)) {
-      return candidate;
-    }
-
-    // Some Nodecast routes return JSON metadata with nested stream URL.
-    if (ct.includes("application/json") || body.trimStart().startsWith("{") || body.trimStart().startsWith("[")) {
-      try {
-        const parsed = JSON.parse(body) as unknown;
-        const extracted = extractStreamUrlDeep(parsed);
-        if (!extracted) return null;
-        try {
-          const candidateUrl = new URL(candidate);
-          const extractedUrl = new URL(extracted, candidateUrl);
-          // Third-party URL: use Nodecast HTTP proxy (same as official app), then transcode only if needed.
-          if (extractedUrl.origin !== candidateUrl.origin) {
-            const nodecastOrigin = `${candidateUrl.protocol}//${candidateUrl.host}`;
-            const viaProxy = buildNodecastProxyStreamPlaylistUrl(
-              nodecastOrigin,
-              extractedUrl.href
-            );
-            const playable = await resolveCandidateToPlayableUrl(viaProxy, headers);
-            if (playable) return playable;
-            return await createNodecastTranscodeUrl(
-              nodecastOrigin,
-              extractedUrl.href,
-              headers
-            );
-          }
-          return extractedUrl.href;
-        } catch {
-          return null;
-        }
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function mapNodecastChannelToLiveStream(raw: unknown, index: number): LiveStream | null {
-  if (!raw || typeof raw !== "object") return null;
-  const c = raw as Record<string, unknown>;
-  const name = String(c.name ?? c.title ?? `Channel ${index + 1}`).trim();
-  const directSource = extractStreamUrlDeep(c) ?? "";
-  if (!name) return null;
-
-  const categoryId = String(
-    c.category_id ??
-      c.group_id ??
-      c.group ??
-      c.category ??
-      c.source_id ??
-      "uncategorized"
-  );
-  const numericId = Number(c.stream_id ?? c.id ?? index + 1);
-  const iconRaw =
-    (typeof c.stream_icon === "string" && c.stream_icon.trim()) ||
-    (typeof c.logo === "string" && c.logo.trim()) ||
-    (typeof c.cover === "string" && c.cover.trim()) ||
-    (typeof c.icon === "string" && c.icon.trim()) ||
-    "";
-  return {
-    stream_id: Number.isFinite(numericId) ? numericId : index + 1,
-    name,
-    category_id: categoryId,
-    stream_icon: iconRaw || undefined,
-    direct_source: directSource || undefined,
-    nodecast_channel_id: String(c.channel_id ?? c.id ?? c.stream_id ?? ""),
-  };
-}
-
-function categoriesFromStreams(streams: LiveStream[]): LiveCategory[] {
-  const seen = new Map<string, LiveCategory>();
-  for (const s of streams) {
-    const cid = String(s.category_id ?? "uncategorized");
-    if (!seen.has(cid)) {
-      seen.set(cid, {
-        category_id: cid,
-        category_name: cid === "uncategorized" ? "Other" : cid,
-        parent_id: 0,
-      });
-    }
-  }
-  return [...seen.values()];
-}
-
-function parseIdCandidates(payload: unknown): string[] {
-  if (!payload) return [];
-  const out = new Set<string>();
-  const arr = Array.isArray(payload) ? payload : asArray(payload);
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const id = String(o.id ?? o.source_id ?? o.connection_id ?? "").trim();
-    const type = String(o.type ?? o.kind ?? o.source_type ?? "").toLowerCase();
-    const provider = String(o.provider ?? o.name ?? "").toLowerCase();
-    if (!id) continue;
-    if (!type && !provider) {
-      out.add(id);
-      continue;
-    }
-    if (type.includes("xtream") || provider.includes("xtream")) {
-      out.add(id);
-    }
-  }
-  return [...out];
-}
-
-/** `/api/sources/status` uses `source_id` and `status` (see Nodecast UI). */
-function collectXtreamSourceIdsFromStatus(payload: unknown): string[] {
-  const out = new Set<string>();
-  const arr = Array.isArray(payload) ? payload : asArray(payload);
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const status = String(o.status ?? "").toLowerCase();
-    if (status && status !== "success") continue;
-    const id = String(o.source_id ?? o.sourceId ?? o.id ?? "").trim();
-    if (!id) continue;
-    out.add(id);
-  }
-  return [...out];
-}
-
-/** Same as Nodecast UI: server-side fetch + rewritten HLS via `/api/proxy/stream?url=`. */
-function buildNodecastProxyStreamPlaylistUrl(nodecastBase: string, upstreamUrl: string): string {
-  const b = nodecastBase.replace(/\/+$/, "");
-  return `${b}/api/proxy/stream?url=${encodeURIComponent(upstreamUrl)}`;
-}
-
-async function tryNodecastLoginAndLoad(
-  base: string,
-  username: string,
-  password: string
-): Promise<{
-  categories: LiveCategory[];
-  streamsByCat: Map<string, LiveStream[]>;
-  authHeaders?: Record<string, string>;
-}> {
-  const loginCandidates = [
-    "/api/auth/login",
-    "/api/login",
-    "/auth/login",
-  ];
-  let loggedIn = false;
-  let nodecastAuthHeaders: Record<string, string> | undefined;
-  for (const path of loginCandidates) {
-    try {
-      const loginPayload = await fetchProxiedJsonWithInit<unknown>(`${base}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const token = extractTokenDeep(loginPayload);
-      if (token) {
-        nodecastAuthHeaders = { Authorization: `Bearer ${token}` };
-      }
-      loggedIn = true;
-      break;
-    } catch {
-      // try next candidate
-    }
-  }
-  if (!loggedIn) {
-    throw new Error("Nodecast login failed. Check panel credentials.");
-  }
-
-  const channelCandidates = [
-    "/api/channels",
-    "/api/live/channels",
-    "/api/content/live",
-    "/api/streams/live",
-    "/api/tv/channels",
-    "/api/content/channels",
-    "/api/live",
-  ];
-  let streams: LiveStream[] = [];
-  for (const path of channelCandidates) {
-    try {
-      const payload = await fetchProxiedJson<unknown>(`${base}${path}`);
-      const arr = asArray(payload);
-      const mapped = arr
-        .map((item, idx) => mapNodecastChannelToLiveStream(item, idx))
-        .filter((s): s is LiveStream => s != null);
-      if (mapped.length) {
-        streams = mapped;
-        break;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-
-  if (!streams.length) {
-    const sourceIdEndpoints = [
-      "/api/sources/status",
-      "/api/xtream/connections",
-      "/api/sources",
-      "/api/proxy/xtream",
-    ];
-    const sourceIds = new Set<string>();
-    for (const ep of sourceIdEndpoints) {
-      try {
-        const payload = await fetchProxiedJsonWithInit<unknown>(`${base}${ep}`, {
-          headers: nodecastAuthHeaders,
-        });
-        if (ep === "/api/sources/status") {
-          for (const id of collectXtreamSourceIdsFromStatus(payload)) sourceIds.add(id);
-        } else {
-          for (const id of parseIdCandidates(payload)) sourceIds.add(id);
-        }
-      } catch {
-        // keep trying
-      }
-    }
-    if (sourceIds.size === 0) {
-      sourceIds.add("9");
-    }
-
-    for (const sourceId of sourceIds) {
-      try {
-        const [catPayload, streamPayload] = await Promise.all([
-          fetchProxiedJsonWithInit<unknown>(`${base}/api/proxy/xtream/${encodeURIComponent(sourceId)}/live_categories`, {
-            headers: nodecastAuthHeaders,
-          }),
-          fetchProxiedJsonWithInit<unknown>(`${base}/api/proxy/xtream/${encodeURIComponent(sourceId)}/live_streams`, {
-            headers: nodecastAuthHeaders,
-          }),
-        ]);
-        const mappedStreams = asArray(streamPayload)
-          .map((item, idx) => mapNodecastChannelToLiveStream(item, idx))
-          .filter((s): s is LiveStream => s != null)
-          .map((s) => ({ ...s, nodecast_source_id: sourceId }));
-        if (!mappedStreams.length) continue;
-
-        streams = mappedStreams;
-        const mappedCats = asArray(catPayload)
-          .map((c) => {
-            if (!c || typeof c !== "object") return null;
-            const o = c as Record<string, unknown>;
-            const id = String(o.category_id ?? o.id ?? "").trim();
-            const name = String(o.category_name ?? o.name ?? id).trim();
-            if (!id) return null;
-            return { category_id: id, category_name: name, parent_id: 0 } as LiveCategory;
-          })
-          .filter((c): c is LiveCategory => c != null);
-        const categories = mappedCats.length ? mappedCats : categoriesFromStreams(streams);
-        return {
-          categories,
-          streamsByCat: groupStreamsByCategory(streams),
-          authHeaders: nodecastAuthHeaders,
-        };
-      } catch {
-        // try next source id
-      }
-    }
-
-    throw new Error("Connected to Nodecast but no channels endpoint returned stream URLs.");
-  }
-
-  const categories = categoriesFromStreams(streams);
-  return {
-    categories,
-    streamsByCat: groupStreamsByCategory(streams),
-    authHeaders: nodecastAuthHeaders,
-  };
-}
-
-async function resolveNodecastStreamUrl(
-  base: string,
-  s: LiveStream,
-  authHeaders?: Record<string, string>
-): Promise<string | null> {
-  if (s.nodecast_source_id) {
-    const sid = encodeURIComponent(s.nodecast_source_id);
-    const streamId = encodeURIComponent(String(s.stream_id));
-    const proxyXtreamCandidates = [
-      `${base}/api/proxy/xtream/${sid}/stream/${streamId}/live?container=m3u8`,
-      `${base}/api/proxy/xtream/${sid}/stream/${streamId}/live?container=ts`,
-      `${base}/api/proxy/xtream/${sid}/stream/${streamId}`,
-      `${base}/api/proxy/xtream/${sid}/live/${streamId}.m3u8`,
-    ];
-    for (const candidate of proxyXtreamCandidates) {
-      const playable = await resolveCandidateToPlayableUrl(candidate, authHeaders);
-      if (playable) return playable;
-    }
-    // In Nodecast mode, never fall back to direct provider URLs.
-    // Upstream hosts commonly reject browser-style access (403/458).
-    return null;
-  }
-  const id = (s.nodecast_channel_id ?? "").trim();
-  if (!id) return null;
-
-  const candidates = [
-    `/api/channels/${encodeURIComponent(id)}/stream`,
-    `/api/channels/${encodeURIComponent(id)}/play`,
-    `/api/live/channels/${encodeURIComponent(id)}/stream`,
-    `/api/stream/${encodeURIComponent(id)}`,
-    `/stream/${encodeURIComponent(id)}`,
-  ];
-
-  for (const p of candidates) {
-    try {
-      const payload = await fetchProxiedJsonWithInit<unknown>(`${base}${p}`, {
-        headers: authHeaders,
-      });
-      const url = extractStreamUrlDeep(payload);
-      if (url) return url;
-    } catch {
-      // try next endpoint
-    }
-  }
-  return null;
-}
-
-function updateChannelBadge(streamsInCat: number, shown: number): void {
-  if (shown === streamsInCat) {
-    elChannelCount.textContent = `${shown} total`;
-  } else {
-    elChannelCount.textContent = `${shown} / ${streamsInCat}`;
-  }
+  const hasExtra = pillDefs.length > 1;
+  elCatPillsWrap.classList.toggle("hidden", !hasExtra);
 }
 
 function renderCategoryPills(): void {
   elCatPills.innerHTML = "";
-  if (!state) return;
-  if (!PILL_DEFS.some((p) => p.id === selectedPillId)) {
+  if (!state || uiAdminPackageId == null) return;
+  if (!pillDefs.some((p) => p.id === selectedPillId)) {
     selectedPillId = "all";
   }
-  for (const p of PILL_DEFS) {
+  for (const p of pillDefs) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "cat-pill";
@@ -879,118 +408,311 @@ function renderCategoryPills(): void {
     btn.dataset.pillId = p.id;
     if (p.id === selectedPillId) btn.classList.add("active");
     btn.textContent = p.label;
+    btn.title = p.label;
     btn.addEventListener("click", () => {
       selectedPillId = p.id;
       elCatPills.querySelectorAll(".cat-pill").forEach((b) => {
         b.classList.toggle("active", (b as HTMLButtonElement).dataset.pillId === p.id);
       });
-      renderStreams(selectedPillId, elStreamFilter.value);
+      renderPackageChannelList();
     });
     elCatPills.appendChild(btn);
   }
-  renderStreams(selectedPillId, elStreamFilter.value);
+  updatePillsVisibility();
+  renderPackageChannelList();
 }
 
-function renderStreams(pillId: PillId, filter: string): void {
-  elStreamList.innerHTML = "";
-  if (!state) return;
-  const streams = streamsForPill(state.streamsByCat, state.categories, pillId).filter(
-    (s) => !isHiddenDecorativeChannel(s.name)
-  );
-  const q = filter.trim().toLowerCase();
+function renderPackageChannelList(): void {
+  if (!state || uiAdminPackageId == null) return;
+  const base = streamsMatchedInPackage(uiAdminPackageId);
+  const afterPill = streamsAfterPill(base, selectedPillId, uiAdminPackageId);
+  const q = elStreamFilter.value.trim().toLowerCase();
   const filtered = q
-    ? streams.filter((s) => {
+    ? afterPill.filter((s) => {
         const d = displayChannelName(s.name).toLowerCase();
         return d.includes(q) || s.name.toLowerCase().includes(q);
       })
-    : streams;
+    : afterPill;
 
-  updateChannelBadge(streams.length, filtered.length);
+  elDynamicList.innerHTML = "";
 
   for (const s of filtered) {
-    const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "stream-row channel-card";
-    if (activeStreamId === s.stream_id) btn.classList.add("active");
+    btn.className = "media-item";
+    btn.dataset.streamId = String(s.stream_id);
+    if (activeStreamId === s.stream_id) btn.classList.add("selected");
 
+    const thumb = document.createElement("div");
+    thumb.className = "media-item__thumb";
     const iconHref = resolvedIconUrl(s.stream_icon, state.base);
     if (iconHref) {
       const img = document.createElement("img");
-      img.className = "ch-logo";
       img.alt = "";
       img.decoding = "async";
       img.loading = "lazy";
       img.src = proxiedUrl(iconHref);
       img.addEventListener("error", () => {
-        const ph = document.createElement("span");
-        ph.className = "ch-logo ch-logo--empty";
-        ph.setAttribute("aria-hidden", "true");
-        img.replaceWith(ph);
+        thumb.innerHTML = "";
+        thumb.classList.add("media-item__thumb--empty");
+        thumb.textContent = "📺";
+        thumb.setAttribute("aria-hidden", "true");
       });
-      btn.appendChild(img);
+      thumb.appendChild(img);
     } else {
-      const ph = document.createElement("span");
-      ph.className = "ch-logo ch-logo--empty";
-      ph.setAttribute("aria-hidden", "true");
-      btn.appendChild(ph);
+      thumb.classList.add("media-item__thumb--empty");
+      thumb.textContent = "📺";
+      thumb.setAttribute("aria-hidden", "true");
     }
 
-    const textWrap = document.createElement("div");
-    textWrap.className = "channel-card__text";
-    const titleEl = document.createElement("span");
-    titleEl.className = "channel-card__title";
-    titleEl.textContent = displayChannelName(s.name);
-    const subEl = document.createElement("span");
-    subEl.className = "channel-card__sub";
+    const info = document.createElement("div");
+    info.className = "media-info";
+    const h4 = document.createElement("h4");
+    h4.textContent = displayChannelName(s.name);
+    const p = document.createElement("p");
     const epgId = s.epg_channel_id;
-    subEl.textContent =
-      typeof epgId === "string" && epgId.trim() ? `EPG: ${epgId}` : "Live stream";
-    const prog = document.createElement("div");
-    prog.className = "channel-card__progress";
-    const progBar = document.createElement("div");
-    progBar.className = "channel-card__progress-bar";
-    prog.appendChild(progBar);
-    textWrap.appendChild(titleEl);
-    textWrap.appendChild(subEl);
-    textWrap.appendChild(prog);
-    btn.appendChild(textWrap);
+    p.textContent =
+      typeof epgId === "string" && epgId.trim() ? `EPG : ${epgId}` : "Direct HD";
+
+    info.appendChild(h4);
+    info.appendChild(p);
+    btn.appendChild(thumb);
+    btn.appendChild(info);
     btn.addEventListener("click", () => {
       activeStreamId = s.stream_id;
-      elStreamList.querySelectorAll("button.channel-card").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
+      elDynamicList.querySelectorAll(".media-item").forEach((el) =>
+        el.classList.toggle("selected", (el as HTMLElement).dataset.streamId === String(s.stream_id))
+      );
       void playStreamByMode(s);
+      elPlayerStatus.textContent = displayChannelName(s.name);
+      showPlayerChrome(true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     });
-    li.appendChild(btn);
-    elStreamList.appendChild(li);
+    elDynamicList.appendChild(btn);
   }
 
   if (filtered.length === 0) {
-    const li = document.createElement("li");
     const empty = document.createElement("div");
-    empty.style.padding = "0.75rem";
-    empty.style.color = "var(--muted)";
-    empty.textContent = "No channels match.";
-    li.appendChild(empty);
-    elStreamList.appendChild(li);
+    empty.className = "vel-empty-msg";
+    const leaves = leafCategoryIdSetForPackage(uiAdminPackageId).size;
+    const rulesHere = assignmentsForPackageLeaves(leafCategoryIdSetForPackage(uiAdminPackageId)).length;
+    empty.textContent =
+      leaves === 0
+        ? "Aucune catégorie dans ce bouquet. Ajoutez des catégories dans Admin (Supabase)."
+        : rulesHere === 0
+          ? "Aucune règle de chaîne ne cible ce bouquet. Dans Admin, assignez des chaînes aux catégories de ce package."
+          : "Aucune chaîne du catalogue ne correspond à ces règles (texte exact / sous-chaîne), ou elles sont masquées.";
+    elDynamicList.appendChild(empty);
   }
+}
+
+function ensureSelectedCountry(): void {
+  const countries = adminConfig.countries;
+  if (countries.length === 0) {
+    selectedAdminCountryId = null;
+    return;
+  }
+  const valid =
+    selectedAdminCountryId != null &&
+    countries.some((c) => c.id === selectedAdminCountryId);
+  if (valid) return;
+  try {
+    const stored = sessionStorage.getItem(COUNTRY_STORAGE_KEY);
+    if (stored && countries.some((c) => c.id === stored)) {
+      selectedAdminCountryId = stored;
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  selectedAdminCountryId = countries[0]?.id ?? null;
+}
+
+function populateCountrySelectFromAdmin(): void {
+  elCountrySelect.innerHTML = "";
+  const countries = adminConfig.countries;
+  if (countries.length === 0) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.disabled = true;
+    o.selected = true;
+    o.textContent = "Aucun pays (Admin)";
+    elCountrySelect.appendChild(o);
+    elCountrySelect.disabled = true;
+    return;
+  }
+  elCountrySelect.disabled = false;
+  ensureSelectedCountry();
+  for (const c of [...countries].sort((a, b) => a.name.localeCompare(b.name, "fr"))) {
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.name;
+    if (c.id === selectedAdminCountryId) o.selected = true;
+    elCountrySelect.appendChild(o);
+  }
+}
+
+function packagesForSelectedCountry(): AdminPackage[] {
+  if (!selectedAdminCountryId) return [];
+  return adminConfig.packages
+    .filter((p) => p.country_id === selectedAdminCountryId)
+    .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+}
+
+function renderPackagesGrid(): void {
+  elPackagesView.innerHTML = "";
+  const st = state;
+  if (!st) return;
+
+  if (adminConfig.countries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "vel-empty-msg";
+    empty.style.gridColumn = "1 / -1";
+    empty.innerHTML =
+      "Aucun <strong>pays</strong> dans la base. Créez des pays et bouquets dans <a href=\"/admin.html\">Admin</a> (tables Supabase).";
+    elPackagesView.appendChild(empty);
+    return;
+  }
+
+  if (!selectedAdminCountryId) {
+    const empty = document.createElement("div");
+    empty.className = "vel-empty-msg";
+    empty.style.gridColumn = "1 / -1";
+    empty.textContent = "Sélectionnez un pays.";
+    elPackagesView.appendChild(empty);
+    return;
+  }
+
+  const pkgs = packagesForSelectedCountry();
+  for (const pkg of pkgs) {
+    const matched = streamsMatchedInPackage(pkg.id);
+    const firstIcon = matched
+      .map((s) => resolvedIconUrl(s.stream_icon, st.base))
+      .find(Boolean);
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "vel-package-card";
+    card.dataset.packageId = pkg.id;
+
+    if (firstIcon) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = proxiedUrl(firstIcon);
+      img.addEventListener("error", () => {
+        img.remove();
+        const em = document.createElement("span");
+        em.className = "vel-package-card__emoji";
+        em.textContent = "📡";
+        em.setAttribute("aria-hidden", "true");
+        card.prepend(em);
+      });
+      card.appendChild(img);
+    } else {
+      const em = document.createElement("span");
+      em.className = "vel-package-card__emoji";
+      em.textContent = "📡";
+      em.setAttribute("aria-hidden", "true");
+      card.appendChild(em);
+    }
+
+    const name = document.createElement("div");
+    name.className = "vel-package-card__name";
+    name.textContent = pkg.name;
+    card.appendChild(name);
+
+    card.addEventListener("click", () => openAdminPackage(pkg.id, pkg.name));
+    elPackagesView.appendChild(card);
+  }
+
+  if (pkgs.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "vel-empty-msg";
+    empty.style.gridColumn = "1 / -1";
+    empty.innerHTML =
+      "Aucun <strong>bouquet</strong> pour ce pays dans la base. Ajoutez des packages dans <a href=\"/admin.html\">Admin</a>.";
+    elPackagesView.appendChild(empty);
+  }
+}
+
+function openAdminPackage(packageId: string, packageName: string): void {
+  if (!state) return;
+  uiShell = "content";
+  uiTab = "live";
+  uiAdminPackageId = packageId;
+  setTabsActive("live");
+  applyTheme(themeKeyForLabel(packageName));
+  elPackagesView.classList.add("hidden");
+  elMainTabs.classList.add("hidden");
+  elContentView.classList.remove("hidden");
+  elStreamFilter.value = "";
+  selectedPillId = "all";
+  syncPillDefsForPackage(packageId);
+  renderCategoryPills();
+  updatePillsVisibility();
+}
+
+function goHome(): void {
+  uiShell = "packages";
+  uiTab = "live";
+  uiAdminPackageId = null;
+  setTabsActive("live");
+  applyTheme("default");
+  elPackagesView.classList.remove("hidden");
+  elMainTabs.classList.remove("hidden");
+  elContentView.classList.add("hidden");
+  elCatPillsWrap.classList.add("hidden");
+  elStreamFilter.value = "";
+  selectedPillId = "all";
+  if (state) renderPackagesGrid();
+}
+
+function showVodPlaceholder(kind: "movies" | "series"): void {
+  uiShell = "content";
+  uiTab = kind;
+  uiAdminPackageId = null;
+  setTabsActive(kind);
+  applyTheme("default");
+  elPackagesView.classList.add("hidden");
+  elMainTabs.classList.remove("hidden");
+  elContentView.classList.remove("hidden");
+  elCatPillsWrap.classList.add("hidden");
+  elStreamFilter.value = "";
+  elDynamicList.innerHTML = "";
+  const msg = document.createElement("div");
+  msg.className = "vel-empty-msg";
+  msg.innerHTML =
+    kind === "movies"
+      ? "Les <strong>films</strong> (VOD) ne sont pas encore branchés sur ce lecteur Nodecast.<br/>Utilisez <strong>DIRECT TV</strong> pour le live."
+      : "Les <strong>séries</strong> (VOD) ne sont pas encore branchées sur ce lecteur Nodecast.<br/>Utilisez <strong>DIRECT TV</strong> pour le live.";
+  elDynamicList.appendChild(msg);
+}
+
+function onTabClick(tab: UiTab): void {
+  if (tab === "live") {
+    goHome();
+    return;
+  }
+  showVodPlaceholder(tab === "movies" ? "movies" : "series");
 }
 
 async function playStreamByMode(s: LiveStream): Promise<void> {
   if (!state) return;
   if (state.mode === "nodecast") {
-    elNowPlaying.textContent = "Resolving stream URL...";
+    elNowPlaying.textContent = "Résolution du flux…";
     const resolved = await resolveNodecastStreamUrl(
       state.base,
       s,
       state.nodecastAuthHeaders
     );
     if (!resolved) {
-      elNowPlaying.innerHTML = '<span class="error">Could not resolve this channel stream URL from Nodecast API.</span>';
+      elNowPlaying.innerHTML =
+        '<span class="error">Impossible de résoudre l’URL de cette chaîne (API Nodecast).</span>';
       return;
     }
     if (!sameOrigin(resolved, state.base)) {
-      elNowPlaying.innerHTML = '<span class="error">Blocked non-Nodecast playback URL; proxy stream endpoint required.</span>';
+      elNowPlaying.innerHTML =
+        '<span class="error">URL de lecture externe bloquée ; proxy requis.</span>';
       return;
     }
     s.direct_source = resolved;
@@ -1007,14 +729,6 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
   playUrl(m3u8, displayChannelName(s.name));
 }
 
-function firstVisibleStream(): LiveStream | null {
-  if (!state) return null;
-  const streams = streamsForPill(state.streamsByCat, state.categories, selectedPillId).filter(
-    (s) => !isHiddenDecorativeChannel(s.name)
-  );
-  return streams[0] ?? null;
-}
-
 async function connect(): Promise<void> {
   setLoginStatus("");
   const base = normalizeServerInput(elServer.value);
@@ -1022,18 +736,17 @@ async function connect(): Promise<void> {
   const password = elPass.value;
 
   if (!base || !username || !password) {
-    setLoginStatus("Fill server URL, username, and password.", true);
+    setLoginStatus("Renseignez l’URL, l’identifiant et le mot de passe.", true);
     return;
   }
 
   elBtnConnect.disabled = true;
-  setLoginStatus("Connecting to Nodecast…");
+  setLoginStatus("Connexion à Nodecast…");
 
   try {
     const mode: "nodecast" = "nodecast";
     const nodecast = await tryNodecastLoginAndLoad(base, username, password);
-    let cats: LiveCategory[] = nodecast.categories;
-    let streamsByCat = nodecast.streamsByCat;
+    const streamsByCat = nodecast.streamsByCat;
     const nodecastAuthHeaders = nodecast.authHeaders;
     const serverInfo: ServerInfo = {
       url: new URL(base).hostname,
@@ -1041,9 +754,8 @@ async function connect(): Promise<void> {
       server_protocol: new URL(base).protocol.replace(":", ""),
     };
 
-    const france = filterCategoriesAndStreamsToFrance(cats, streamsByCat);
-    cats = france.categories;
-    streamsByCat = france.streamsByCat;
+    await loadAdminConfig();
+    populateCountrySelectFromAdmin();
 
     state = {
       mode,
@@ -1052,20 +764,15 @@ async function connect(): Promise<void> {
       password,
       nodecastAuthHeaders,
       serverInfo: serverInfo!,
-      categories: cats,
-      streamsByCat,
+      streamsByCatAll: new Map(streamsByCat),
     };
 
     selectedPillId = "all";
-    elStreamFilter.value = "";
-    renderCategoryPills();
-    const first = firstVisibleStream();
-    if (first) {
-      activeStreamId = first.stream_id;
-      renderStreams(selectedPillId, elStreamFilter.value);
-      void playStreamByMode(first);
-    }
+    activeStreamId = null;
+    destroyPlayer();
+    elNowPlaying.textContent = "";
 
+    goHome();
     elLoginPanel.classList.add("hidden");
     elMain.classList.remove("hidden");
     setLoginStatus("");
@@ -1080,23 +787,79 @@ function disconnect(): void {
   state = null;
   activeStreamId = null;
   selectedPillId = "all";
+  uiTab = "live";
+  uiShell = "packages";
+  uiAdminPackageId = null;
   destroyPlayer();
-  elStreamList.innerHTML = "";
+  elDynamicList.innerHTML = "";
   elCatPills.innerHTML = "";
+  elPackagesView.innerHTML = "";
   elStreamFilter.value = "";
   elNowPlaying.textContent = "";
-  elChannelCount.textContent = "0";
+  elContentView.classList.add("hidden");
+  elPackagesView.classList.remove("hidden");
+  elMainTabs.classList.remove("hidden");
+  elCatPillsWrap.classList.add("hidden");
+  setTabsActive("live");
+  applyTheme("default");
   elMain.classList.add("hidden");
   elLoginPanel.classList.remove("hidden");
   setLoginStatus("");
 }
 
+function onCountryChange(): void {
+  selectedAdminCountryId = elCountrySelect.value || null;
+  try {
+    if (selectedAdminCountryId) {
+      sessionStorage.setItem(COUNTRY_STORAGE_KEY, selectedAdminCountryId);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if (!state) return;
+
+  if (uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
+    const pkg = adminConfig.packages.find((p) => p.id === uiAdminPackageId);
+    if (!pkg || pkg.country_id !== selectedAdminCountryId) {
+      goHome();
+      return;
+    }
+    syncPillDefsForPackage(uiAdminPackageId);
+    renderCategoryPills();
+    return;
+  }
+
+  if (uiShell === "packages" && uiTab === "live") {
+    renderPackagesGrid();
+  }
+}
+
 elBtnConnect.addEventListener("click", () => void connect());
 elBtnLogout.addEventListener("click", disconnect);
+elBtnBackHome.addEventListener("click", () => {
+  if (uiTab === "live") goHome();
+  else {
+    goHome();
+  }
+});
+
+elBtnClosePlayer.addEventListener("click", () => {
+  elVideo.pause();
+  showPlayerChrome(false);
+});
 
 elStreamFilter.addEventListener("input", () => {
-  renderStreams(selectedPillId, elStreamFilter.value);
+  if (uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
+    renderPackageChannelList();
+  }
 });
+
+elTabLive.addEventListener("click", () => onTabClick("live"));
+elTabMovies.addEventListener("click", () => onTabClick("movies"));
+elTabSeries.addEventListener("click", () => onTabClick("series"));
+
+elCountrySelect.addEventListener("change", onCountryChange);
 
 elServer.value = "http://5.180.180.198:3000";
 elUser.value = "samadoxal";
@@ -1107,3 +870,8 @@ document.addEventListener("keydown", (e) => {
     void connect();
   }
 });
+
+void (async () => {
+  await loadAdminConfig();
+  populateCountrySelectFromAdmin();
+})();

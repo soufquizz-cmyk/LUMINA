@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lumina — Admin</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="admin-standalone">
+    <a href="/" class="admin-standalone__back">← Player</a>
+
+    <details class="admin-fold" id="admin-fold-top" open>
+      <summary class="admin-fold__summary">
+        <span class="admin-fold__summary-text">
+          <span class="admin-fold__title">Admin</span>
+          <span class="admin-fold__sub">Countries, packages, categories, channel rules, hidden filters, and preview.</span>
+          <span id="admin-fold-meta" class="admin-fold__meta" aria-live="polite"></span>
+        </span>
+      </summary>
+      <div class="admin-fold__body">
+        <section class="panel admin-standalone__connect">
+          <div class="login-card" style="max-width: 520px">
+            <div class="field">
+              <label for="admin-server">Nodecast URL</label>
+              <input id="admin-server" type="url" placeholder="http://host:3000" autocomplete="off" />
+            </div>
+            <div class="field row">
+              <div>
+                <label for="admin-user">Username</label>
+                <input id="admin-user" type="text" autocomplete="username" />
+              </div>
+              <div>
+                <label for="admin-pass">Password</label>
+                <input id="admin-pass" type="password" autocomplete="current-password" />
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" id="admin-btn-connect" class="primary">Load catalogue</button>
+              <span id="admin-connect-status" class="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
+
+        <p id="admin-status" class="status admin-standalone__status">Configure Supabase env vars to persist changes.</p>
+      </div>
+    </details>
+
+    <div id="admin-work" class="admin-standalone__work hidden">
+      <section class="admin-panel admin-preview-panel" aria-label="Preview">
+        <div class="admin-panel__head">
+          <h3>Preview</h3>
+          <p class="admin-hint admin-hint--inline">Choosing a channel in the list starts playback (same size as the main player).</p>
+        </div>
+        <div class="admin-preview-grid">
+          <div class="admin-preview-video-wrap player-shell">
+            <div class="player-frame">
+              <video id="admin-preview-video" controls playsinline></video>
+            </div>
+            <p id="admin-preview-status" class="admin-preview-status" aria-live="polite"></p>
+          </div>
+          <div class="admin-catalog-col">
+            <div class="field">
+              <label for="admin-provider-cat">Catalogue package (provider)</label>
+              <select id="admin-provider-cat"></select>
+            </div>
+            <label for="admin-channel-search">Channels in this catalogue package</label>
+            <div class="admin-row">
+              <input id="admin-channel-search" type="search" placeholder="Filter by name…" />
+            </div>
+            <select id="admin-channel-pick" size="12" class="admin-channel-pick"></select>
+          </div>
+        </div>
+      </section>
+
+      <div class="admin-hierarchy-grid">
+        <section class="admin-card">
+          <h4>Countries</h4>
+          <p class="admin-hint">Top level (e.g. France, USA).</p>
+          <div class="admin-row">
+            <input id="admin-country-name" type="text" placeholder="Country name" />
+            <button type="button" id="admin-add-country" class="primary">Add</button>
+          </div>
+          <ul id="admin-country-list" class="admin-list"></ul>
+        </section>
+        <section class="admin-card">
+          <h4>Packages</h4>
+          <p class="admin-hint">Bouquets under a country (e.g. Canal+, beIN, Disney+).</p>
+          <div class="field">
+            <label for="admin-pkg-country">Country</label>
+            <select id="admin-pkg-country"></select>
+          </div>
+          <div class="admin-row">
+            <input id="admin-package-name" type="text" placeholder="Package name" />
+            <button type="button" id="admin-add-package" class="primary">Add</button>
+          </div>
+          <ul id="admin-package-list" class="admin-list"></ul>
+        </section>
+        <section class="admin-card">
+          <h4>Categories</h4>
+          <p class="admin-hint">Groups inside a package (Sports, Movies, …).</p>
+          <div class="field">
+            <label for="admin-cat-country">Country</label>
+            <select id="admin-cat-country"></select>
+          </div>
+          <div class="field">
+            <label for="admin-cat-package">Package</label>
+            <select id="admin-cat-package"></select>
+          </div>
+          <div class="admin-row">
+            <input id="admin-leaf-category-name" type="text" placeholder="Category name" />
+            <button type="button" id="admin-add-leaf-category" class="primary">Add</button>
+          </div>
+          <ul id="admin-leaf-category-list" class="admin-list"></ul>
+        </section>
+      </div>
+
+      <div class="admin-grid admin-grid--assign">
+        <section class="admin-card admin-card--span2">
+          <h4>Channel assignments</h4>
+          <p class="admin-hint">Pick a channel to fill the name, then edit if needed. Assign to your <strong>category</strong> (country › package › category).</p>
+          <div class="field">
+            <label for="admin-assignment-name">Match name</label>
+            <input
+              id="admin-assignment-name"
+              type="text"
+              placeholder="Select a channel or type a name…"
+              autocomplete="off"
+            />
+          </div>
+          <div class="field">
+            <label for="admin-channel-category">Your category</label>
+            <select id="admin-channel-category" size="6" class="admin-assign-category-select"></select>
+          </div>
+          <div class="admin-row">
+            <button type="button" id="admin-add-assignment" class="primary">Assign to category</button>
+          </div>
+          <ul id="admin-assignment-list" class="admin-list admin-list--tall"></ul>
+        </section>
+        <section class="admin-card">
+          <h4>Hidden filters</h4>
+          <p class="admin-hint">Hide channels whose name contains this text (case-insensitive).</p>
+          <div class="admin-row">
+            <input id="admin-hidden-match" type="text" placeholder="Substring to hide…" />
+            <button type="button" id="admin-add-filter" class="primary">Add</button>
+          </div>
+          <ul id="admin-filter-list" class="admin-list"></ul>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="/src/admin.ts"></script>
+  </body>
+</html>

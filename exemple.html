@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VeloraVIP Premium</title>
+    <style>
+        :root {
+            --bg-color: #06050a;
+            --surface-color: #110f1a;
+            --primary-color: #8A2BE2;
+            --text-main: #ffffff;
+            --text-muted: #8e8c9e;
+            --accent-glow: rgba(138, 43, 226, 0.3);
+            --transition: all 0.4s ease;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            transition: background-color 0.5s ease;
+            overflow-x: hidden;
+        }
+
+        /* Header Modernisé - VeloraVIP */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 25px 20px;
+        }
+
+        .brand {
+            font-size: 1.8rem;
+            font-weight: 900;
+            letter-spacing: -1px;
+            color: var(--text-main);
+        }
+
+        .brand span {
+            color: var(--primary-color);
+            text-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .country-select {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 1.2rem;
+            outline: none;
+        }
+
+        /* Player Sticky avec Espacement */
+        #player-container {
+            position: sticky;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+            display: none;
+            background: #000;
+            margin-bottom: 25px; /* Espace réparé sous le player */
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+
+        .video-wrapper {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            position: relative;
+        }
+
+        .video-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .close-player {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(0,0,0,0.6);
+            border: none;
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            z-index: 10;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+
+        .player-overlay {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            padding: 15px 20px;
+            background: linear-gradient(transparent, rgba(0,0,0,0.9));
+            color: white;
+            font-weight: bold;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .play-icon {
+            color: var(--primary-color);
+        }
+
+        /* Onglets de Navigation */
+        .nav-tabs {
+            display: flex;
+            gap: 12px;
+            padding: 0 20px;
+            margin-bottom: 30px;
+        }
+
+        .tab {
+            background: rgba(255,255,255,0.05);
+            border: none;
+            color: var(--text-muted);
+            padding: 12px 20px;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            transition: var(--transition);
+            cursor: pointer;
+        }
+
+        .tab.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 4px 15px var(--accent-glow);
+        }
+
+        /* Grille des Packages */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            padding: 0 20px;
+        }
+
+        .card {
+            background-color: var(--surface-color);
+            aspect-ratio: 1;
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 25px;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.03);
+            transition: transform 0.2s;
+        }
+
+        .card:active { transform: scale(0.94); }
+        .card img { width: 100%; height: 100%; object-fit: contain; }
+
+        /* Vue Contenu et Listes */
+        #content-view { display: none; padding: 0 20px; }
+        .back-btn { 
+            background: none; 
+            border: none; 
+            color: var(--primary-color); 
+            font-weight: 900; 
+            padding: 15px 0 25px 0; 
+            display: block; 
+            cursor: pointer; 
+            font-size: 0.9rem;
+        }
+
+        .item-list { 
+            display: grid; 
+            grid-template-columns: 1fr; 
+            gap: 12px; 
+            padding-bottom: 40px; 
+        }
+
+        .media-item {
+            display: flex;
+            background: var(--surface-color);
+            border-radius: 18px;
+            overflow: hidden;
+            border: 2px solid transparent;
+            cursor: pointer;
+            height: 110px;
+            transition: var(--transition);
+        }
+
+        /* Highlight de la chaîne/film sélectionné */
+        .media-item.selected {
+            border-color: var(--primary-color);
+            background: rgba(255,255,255,0.08);
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .media-info { padding: 15px; display: flex; flex-direction: column; justify-content: center; }
+        .media-info h4 { margin-bottom: 5px; font-size: 1rem; }
+        .media-info p { font-size: 0.8rem; color: var(--text-muted); }
+
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="brand">Velora<span>VIP</span></div>
+        <select class="country-select">
+            <option>🇫🇷</option>
+            <option>🌍</option>
+        </select>
+    </header>
+
+    <!-- Player Sticky -->
+    <div id="player-container">
+        <div class="video-wrapper">
+            <button class="close-player" onclick="closePlayer()">✕</button>
+            <img src="https://wallpapercave.com/wp/wp7624224.jpg" alt="Player Thumbnail">
+            <div class="player-overlay">
+                <span class="play-icon">▶</span> <span id="player-status">En lecture</span>
+            </div>
+        </div>
+    </div>
+
+    <main>
+        <!-- Onglets Navigation -->
+        <div class="nav-tabs" id="main-tabs">
+            <button class="tab active" id="tab-live" onclick="showCategory('live')">DIRECT TV</button>
+            <button class="tab" id="tab-movies" onclick="showCategory('movies')">FILMS</button>
+            <button class="tab" id="tab-series" onclick="showCategory('series')">SÉRIES</button>
+        </div>
+
+        <!-- Grille Accueil (Bouquets) -->
+        <div id="packages-view" class="grid">
+            <div class="card" onclick="openPackage('canal')">
+                <img src="https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" alt="Canal+">
+            </div>
+            <div class="card" onclick="openPackage('bein')">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/BeIN_Sports_logo_%28vertical_version%29.svg/3840px-BeIN_Sports_logo_%28vertical_version%29.svg.png" alt="beIN">
+            </div>
+            <div class="card" onclick="openPackage('disney')">
+                <img src="https://static.vecteezy.com/system/resources/previews/022/636/380/non_2x/disney-logo-disney-icon-transparent-free-png.png" alt="Disney+">
+            </div>
+            <div class="card" onclick="openPackage('default')">
+                <span style="font-size: 3rem;">🌍</span>
+            </div>
+        </div>
+
+        <!-- Vue Listes -->
+        <div id="content-view">
+            <button class="back-btn" onclick="goHome()">← RETOUR À L'ACCUEIL</button>
+            <div class="item-list" id="dynamic-list"></div>
+        </div>
+    </main>
+
+    <script>
+        // Thèmes de couleurs par package
+        const themes = {
+            default: { bg: '#06050a', surface: '#110f1a', primary: '#8A2BE2' },
+            canal: { bg: '#000000', surface: '#1a1a1a', primary: '#ffffff' },
+            bein: { bg: '#2b0c3d', surface: '#3a1451', primary: '#d40062' },
+            disney: { bg: '#001a4d', surface: '#002673', primary: '#00e6ff' }
+        };
+
+        // Base de données : Films, Séries, et vraies Chaînes
+        const content = {
+            movies: [
+                { title: "Joker", desc: "Film • 2019", img: "https://c4.wallpaperflare.com/wallpaper/675/275/718/joker-2019-movie-joker-joaquin-phoenix-actor-men-hd-wallpaper-preview.jpg" },
+                { title: "Batman", desc: "Film • 2022", img: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQTdhEPYiR_VIyT6iy3Zoj0DSOy_0UGqEWa5Q&s" },
+                { title: "Spider-Man", desc: "Film • 2023", img: "https://mir-s3-cdn-cf.behance.net/projects/404/1302cb218102969.Y3JvcCw3MjAwLDU2MzEsMCw1Mw.jpg" },
+                { title: "Oppenheimer", desc: "Film • 2023", img: "https://m.media-amazon.com/images/I/71GQTS5hI+S._AC_UF894,1000_QL80_.jpg" }
+            ],
+            series: [
+                { title: "The Last of Us", desc: "Série • S01", img: "https://i.pinimg.com/474x/03/3c/f5/033cf57372da057f72de6eb02ced064f.jpg" },
+                { title: "The Boys", desc: "Série • S04", img: "https://i.pinimg.com/736x/fd/59/ff/fd59ffbde4fb8b0261a660f72ef31da9.jpg" },
+                { title: "Vikings", desc: "Série • S06", img: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT1GI5Ug-pdV6IQuR2GHmLqKuFPfScNypypvA&s" },
+                { title: "Wednesday", desc: "Série • S01", img: "https://c4.wallpaperflare.com/wallpaper/462/216/45/movies-dark-wednesday-addams-wednesday-tv-series-movie-poster-hd-wallpaper-preview.jpg" }
+            ],
+            canal: [
+                { title: "Canal+ HD", desc: "Direct HD", img: "https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" },
+                { title: "Canal+ Sport 360", desc: "Direct HD", img: "https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" },
+                { title: "Canal+ Foot", desc: "Direct HD", img: "https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" },
+                { title: "Canal+ Cinema", desc: "Direct HD", img: "https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" },
+                { title: "Canal+ Grand Ecran", desc: "Direct HD", img: "https://images.seeklogo.com/logo-png/2/2/canal-plus-logo-png_seeklogo-25565.png" }
+            ],
+            bein: [
+                { title: "beIN Sports 1 FR", desc: "Direct HD", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/BeIN_Sports_logo_%28vertical_version%29.svg/3840px-BeIN_Sports_logo_%28vertical_version%29.svg.png" },
+                { title: "beIN Sports 2 FR", desc: "Direct HD", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/BeIN_Sports_logo_%28vertical_version%29.svg/3840px-BeIN_Sports_logo_%28vertical_version%29.svg.png" },
+                { title: "beIN Sports 3 FR", desc: "Direct HD", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/BeIN_Sports_logo_%28vertical_version%29.svg/3840px-BeIN_Sports_logo_%28vertical_version%29.svg.png" },
+                { title: "beIN Max 4", desc: "Direct HD", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/BeIN_Sports_logo_%28vertical_version%29.svg/3840px-BeIN_Sports_logo_%28vertical_version%29.svg.png" }
+            ],
+            disney: [
+                { title: "Disney Channel", desc: "Direct HD", img: "https://static.vecteezy.com/system/resources/previews/022/636/380/non_2x/disney-logo-disney-icon-transparent-free-png.png" },
+                { title: "Disney Junior", desc: "Direct HD", img: "https://static.vecteezy.com/system/resources/previews/022/636/380/non_2x/disney-logo-disney-icon-transparent-free-png.png" },
+                { title: "National Geographic", desc: "Direct HD", img: "https://static.vecteezy.com/system/resources/previews/022/636/380/non_2x/disney-logo-disney-icon-transparent-free-png.png" }
+            ]
+        };
+
+        function applyTheme(p) {
+            const t = themes[p] || themes.default;
+            document.documentElement.style.setProperty('--bg-color', t.bg);
+            document.documentElement.style.setProperty('--surface-color', t.surface);
+            document.documentElement.style.setProperty('--primary-color', t.primary);
+        }
+
+        function showCategory(cat) {
+            // Gérer visuellement les onglets
+            document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + cat).classList.add('active');
+
+            if (cat === 'live') {
+                goHome(); // Si on clique sur DIRECT TV, on affiche les bouquets
+                return;
+            }
+            
+            // Pour Films ou Séries
+            applyTheme('default');
+            document.getElementById('packages-view').style.display = 'none';
+            document.getElementById('content-view').style.display = 'block';
+            renderList(cat);
+        }
+
+        function openPackage(pkg) {
+            applyTheme(pkg); // Change la couleur selon beIN/Canal/Disney
+            document.getElementById('packages-view').style.display = 'none';
+            document.getElementById('main-tabs').style.display = 'none'; // Cache les onglets (comme demandé)
+            document.getElementById('content-view').style.display = 'block';
+            renderList(pkg);
+        }
+
+        function renderList(type) {
+            const list = document.getElementById('dynamic-list');
+            list.innerHTML = '';
+            
+            const items = content[type] || [];
+            const isChannel = (type !== 'movies' && type !== 'series');
+            
+            // Format d'image (Cover pour Films/Séries, Contain pour logos chaînes)
+            const objectFit = isChannel ? 'contain' : 'cover';
+            const bgImage = isChannel ? 'rgba(255,255,255,0.05)' : 'transparent';
+            const imgPadding = isChannel ? '15px' : '0px';
+
+            items.forEach((item, idx) => {
+                list.innerHTML += `
+                    <div class="media-item" id="item-${idx}" onclick="playItem('${idx}', '${item.title}')">
+                        <div style="width: 80px; height: 110px; background: ${bgImage}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                            <img src="${item.img}" style="width: 100%; height: 100%; object-fit: ${objectFit}; padding: ${imgPadding};">
+                        </div>
+                        <div class="media-info">
+                            <h4>${item.title}</h4>
+                            <p>${item.desc}</p>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function playItem(id, title) {
+            // Mettre en couleur l'élément sélectionné
+            document.querySelectorAll('.media-item').forEach(el => el.classList.remove('selected'));
+            document.getElementById(`item-${id}`).classList.add('selected');
+            
+            // Afficher le player sticky
+            document.getElementById('player-container').style.display = 'block';
+            document.getElementById('player-status').innerText = title;
+            
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function closePlayer() {
+            document.getElementById('player-container').style.display = 'none';
+        }
+
+        function goHome() {
+            applyTheme('default');
+            document.getElementById('content-view').style.display = 'none';
+            document.getElementById('packages-view').style.display = 'grid';
+            
+            // Réafficher les onglets et activer Direct TV
+            document.getElementById('main-tabs').style.display = 'flex';
+            document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-live').classList.add('active');
+        }
+    </script>
+</body>
+</html>

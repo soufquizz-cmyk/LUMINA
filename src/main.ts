@@ -38,6 +38,7 @@ import {
   getSupabaseClient,
   isLikelyUuid,
   matchDbCountryIdByDisplayName,
+  uploadPackageCoverFile,
 } from "./supabaseAdminHierarchy";
 
 tryConsumeAdminAccessFromUrl();
@@ -74,6 +75,8 @@ const elDapName = document.getElementById("dap-name") as HTMLInputElement;
 const elDapCancel = document.getElementById("dap-cancel") as HTMLButtonElement;
 const elDapSubmit = document.getElementById("dap-submit") as HTMLButtonElement;
 const elDapStatus = document.getElementById("dap-status") as HTMLParagraphElement;
+const elDapCover = document.getElementById("dap-cover") as HTMLInputElement;
+const elDapCoverUrl = document.getElementById("dap-cover-url") as HTMLInputElement;
 const elDapEmptyCountriesHint = document.getElementById("dap-empty-countries-hint") as HTMLParagraphElement | null;
 const elDapNewCountryName = document.getElementById("dap-new-country-name") as HTMLInputElement;
 const elDapAddCountry = document.getElementById("dap-add-country") as HTMLButtonElement;
@@ -724,11 +727,28 @@ function renderPackagesGrid(): void {
         card.appendChild(del);
       }
 
-      const em = document.createElement("span");
-      em.className = "vel-package-card__emoji";
-      em.textContent = "📦";
-      em.setAttribute("aria-hidden", "true");
-      card.appendChild(em);
+      const cover = pkg.cover_url?.trim();
+      if (cover && /^https?:\/\//i.test(cover)) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.setAttribute("role", "presentation");
+        img.src = cover;
+        img.addEventListener("error", () => {
+          img.remove();
+          const em = document.createElement("span");
+          em.className = "vel-package-card__emoji";
+          em.textContent = "📦";
+          em.setAttribute("aria-hidden", "true");
+          card.appendChild(em);
+        });
+        card.appendChild(img);
+      } else {
+        const em = document.createElement("span");
+        em.className = "vel-package-card__emoji";
+        em.textContent = "📦";
+        em.setAttribute("aria-hidden", "true");
+        card.appendChild(em);
+      }
 
       const title = document.createElement("span");
       title.className = "vel-package-card__title";
@@ -875,6 +895,8 @@ function openAddPackageDialog(): void {
   elDapStatus.textContent = "";
   elDapStatus.classList.remove("error");
   elDapNewCountryName.value = "";
+  elDapCover.value = "";
+  elDapCoverUrl.value = "";
   populateAddPackageDialogCountries();
   elDapEmptyCountriesHint?.classList.toggle("hidden", dbAdminCountries.length > 0);
   const match = matchedDbCountryIdForSelection();
@@ -948,10 +970,32 @@ elDapSubmit.addEventListener("click", () => {
       elDapStatus.classList.add("error");
       return;
     }
+    const file = elDapCover.files?.[0];
+    const urlPaste = elDapCoverUrl.value.trim();
+    if (file && urlPaste) {
+      elDapStatus.textContent = "Utilisez soit un fichier, soit une URL — pas les deux.";
+      elDapStatus.classList.add("error");
+      return;
+    }
+    if (urlPaste && !/^https?:\/\//i.test(urlPaste)) {
+      elDapStatus.textContent = "L’URL de l’image doit commencer par http:// ou https://";
+      elDapStatus.classList.add("error");
+      return;
+    }
+
     elDapSubmit.disabled = true;
-    const { error } = await sb.from("admin_packages").insert({ country_id: countryId, name });
-    elDapSubmit.disabled = false;
+    const insertRow: { country_id: string; name: string; cover_url?: string | null } = {
+      country_id: countryId,
+      name,
+      cover_url: file ? null : urlPaste || null,
+    };
+    const { data: inserted, error } = await sb
+      .from("admin_packages")
+      .insert(insertRow)
+      .select("id")
+      .single();
     if (error) {
+      elDapSubmit.disabled = false;
       const dup = /unique|duplicate/i.test(error.message);
       elDapStatus.textContent = dup
         ? "Un package avec ce nom existe déjà pour ce pays."
@@ -959,6 +1003,32 @@ elDapSubmit.addEventListener("click", () => {
       elDapStatus.classList.add("error");
       return;
     }
+    const newId = inserted && typeof inserted === "object" && "id" in inserted ? String(inserted.id) : "";
+    if (file && newId) {
+      const up = await uploadPackageCoverFile(sb, newId, file);
+      if ("error" in up) {
+        elDapStatus.textContent = `Package créé ; image non enregistrée : ${up.error}`;
+        elDapStatus.classList.remove("error");
+        elDapSubmit.disabled = false;
+        await refreshSupabaseHierarchy();
+        if (state && uiShell === "packages" && uiTab === "live") {
+          renderPackagesGrid();
+        }
+        return;
+      }
+      const { error: upErr } = await sb.from("admin_packages").update({ cover_url: up.url }).eq("id", newId);
+      if (upErr) {
+        elDapStatus.textContent = `Package créé ; fichier reçu mais URL non sauvegardée : ${upErr.message}`;
+        elDapStatus.classList.add("error");
+        elDapSubmit.disabled = false;
+        await refreshSupabaseHierarchy();
+        if (state && uiShell === "packages" && uiTab === "live") {
+          renderPackagesGrid();
+        }
+        return;
+      }
+    }
+    elDapSubmit.disabled = false;
     closeAddPackageDialog();
     await refreshSupabaseHierarchy();
     if (state && uiShell === "packages" && uiTab === "live") {

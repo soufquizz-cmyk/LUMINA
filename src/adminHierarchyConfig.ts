@@ -5,6 +5,8 @@ export type AdminPackage = {
   id: string;
   country_id: string;
   name: string;
+  /** Public HTTPS URL (Supabase Storage or CDN) shown on the package card. */
+  cover_url?: string | null;
   /** Optional overrides; null/empty = use preset for that slot. */
   theme_bg?: string | null;
   theme_surface?: string | null;
@@ -67,6 +69,7 @@ export function normalizePackage(raw: unknown): AdminPackage | null {
     id: o.id,
     country_id: o.country_id,
     name: o.name,
+    cover_url: pickThemeStr(o, "cover_url"),
     theme_bg: pickThemeStr(o, "theme_bg"),
     theme_surface: pickThemeStr(o, "theme_surface"),
     theme_primary: pickThemeStr(o, "theme_primary"),

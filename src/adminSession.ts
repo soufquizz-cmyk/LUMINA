@@ -12,8 +12,9 @@ export function isAdminSession(): boolean {
   } catch {
     /* ignore */
   }
-  /* Local dev without a key configured: keep CRUD reachable. */
-  if (import.meta.env.DEV && !accessKey()) return true;
+  /* No key in env (any environment): Paramètres + Outils stay visible without ?admin_access.
+     Set VITE_ADMIN_ACCESS_KEY on the host (e.g. Vercel) to require ?admin_access=<key> once per tab. */
+  if (!accessKey()) return true;
   return false;
 }
 

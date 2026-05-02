@@ -19,6 +19,7 @@ create table public.admin_packages (
   id uuid primary key default gen_random_uuid(),
   country_id uuid not null references public.admin_countries (id) on delete cascade,
   name text not null,
+  cover_url text,
   theme_bg text,
   theme_surface text,
   theme_primary text,
@@ -76,6 +77,11 @@ alter table public.admin_packages add column if not exists theme_surface text;
 alter table public.admin_packages add column if not exists theme_primary text;
 alter table public.admin_packages add column if not exists theme_glow text;
 alter table public.admin_packages add column if not exists theme_back text;
+alter table public.admin_packages add column if not exists cover_url text;
+
+-- Image des bouquets Supabase : URL publique (Storage ou externe).
+-- Storage : créer un bucket public « package-covers » (Dashboard → Storage), puis des politiques
+-- lecture/écriture pour rôle `anon` si vous utilisez la clé publishable côté lecteur.
 
 -- Liste des pays reconnus pour le menu (clé = préfixe normalisé du nom de catégorie IPTV).
 -- Si la table est vide, le lecteur utilise la liste intégrée (fallback).

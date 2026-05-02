@@ -19,10 +19,41 @@ export async function fetchDbAdminCountries(sb: SupabaseClient): Promise<AdminCo
 export async function fetchDbAdminPackages(sb: SupabaseClient): Promise<AdminPackage[]> {
   const { data, error } = await sb
     .from("admin_packages")
-    .select("id, country_id, name, theme_bg, theme_surface, theme_primary, theme_glow, theme_back")
+    .select(
+      "id, country_id, name, cover_url, theme_bg, theme_surface, theme_primary, theme_glow, theme_back"
+    )
     .order("name", { ascending: true });
   if (error) throw error;
   return (data ?? []).map(normalizePackage).filter((p): p is AdminPackage => p != null);
+}
+
+/** Public bucket for package card images (create in Supabase Dashboard → Storage). */
+export const PACKAGE_COVERS_BUCKET = "package-covers";
+
+const MAX_COVER_BYTES = 2 * 1024 * 1024;
+
+/** Upload a cover file; returns public URL or an error message. */
+export async function uploadPackageCoverFile(
+  sb: SupabaseClient,
+  packageId: string,
+  file: File
+): Promise<{ url: string } | { error: string }> {
+  if (file.size > MAX_COVER_BYTES) {
+    return { error: "Image trop volumineuse (max 2 Mo)." };
+  }
+  const rawExt = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const ext = /^[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : "jpg";
+  const path = `${packageId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const { error } = await sb.storage.from(PACKAGE_COVERS_BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+    contentType: file.type || `image/${ext === "jpg" ? "jpeg" : ext}`,
+  });
+  if (error) return { error: error.message };
+  const { data } = sb.storage.from(PACKAGE_COVERS_BUCKET).getPublicUrl(path);
+  const url = data.publicUrl;
+  if (!url) return { error: "URL publique indisponible." };
+  return { url };
 }
 
 /** Match Supabase `admin_countries.id` from the provider UI country display name. */

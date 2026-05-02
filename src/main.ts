@@ -10,8 +10,10 @@ import {
   type AdminCountry,
   type AdminPackage,
   EMPTY_ADMIN_CONFIG,
+  normalizePackage,
   readAdminConfigFromLocalStorage,
 } from "./adminHierarchyConfig";
+import { THEMES, presetForPackageName } from "./packageThemePresets";
 import {
   type LiveStream,
   tryNodecastLoginAndLoad,
@@ -74,33 +76,6 @@ let selectedAdminCountryId: string | null = null;
 
 const COUNTRY_STORAGE_KEY = "lumina_selected_country_id";
 
-const THEMES: Record<string, { bg: string; surface: string; primary: string; glow: string }> = {
-  default: {
-    bg: "#06050a",
-    surface: "#110f1a",
-    primary: "#8A2BE2",
-    glow: "rgba(138, 43, 226, 0.3)",
-  },
-  canal: {
-    bg: "#000000",
-    surface: "#1a1a1a",
-    primary: "#ffffff",
-    glow: "rgba(255, 255, 255, 0.25)",
-  },
-  bein: {
-    bg: "#2b0c3d",
-    surface: "#3a1451",
-    primary: "#d40062",
-    glow: "rgba(212, 0, 98, 0.35)",
-  },
-  disney: {
-    bg: "#001a4d",
-    surface: "#002673",
-    primary: "#00e6ff",
-    glow: "rgba(0, 230, 255, 0.3)",
-  },
-};
-
 const supabaseUrl = import.meta.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = import.meta.env
   .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -151,20 +126,32 @@ let state: {
 let hls: Hls | null = null;
 let activeStreamId: number | null = null;
 
-function themeKeyForLabel(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes("canal")) return "canal";
-  if (n.includes("bein")) return "bein";
-  if (n.includes("disney")) return "disney";
-  return "default";
-}
-
-function applyTheme(key: string): void {
+function applyPresetTheme(key: string): void {
   const t = THEMES[key] || THEMES.default;
   elMain.style.setProperty("--vel-bg", t.bg);
   elMain.style.setProperty("--vel-surface", t.surface);
   elMain.style.setProperty("--vel-primary", t.primary);
   elMain.style.setProperty("--vel-accent-glow", t.glow);
+  elMain.style.removeProperty("--vel-back");
+}
+
+function applyThemeForPackage(pkg: AdminPackage | null): void {
+  if (!pkg) {
+    applyPresetTheme("default");
+    return;
+  }
+  const preset = presetForPackageName(pkg.name);
+  const bg = pkg.theme_bg?.trim() || preset.bg;
+  const surface = pkg.theme_surface?.trim() || preset.surface;
+  const primary = pkg.theme_primary?.trim() || preset.primary;
+  const glow = pkg.theme_glow?.trim() || preset.glow;
+  elMain.style.setProperty("--vel-bg", bg);
+  elMain.style.setProperty("--vel-surface", surface);
+  elMain.style.setProperty("--vel-primary", primary);
+  elMain.style.setProperty("--vel-accent-glow", glow);
+  const back = pkg.theme_back?.trim();
+  if (back) elMain.style.setProperty("--vel-back", back);
+  else elMain.style.removeProperty("--vel-back");
 }
 
 function setTabsActive(tab: UiTab): void {
@@ -326,7 +313,9 @@ async function loadAdminConfig(): Promise<void> {
       supabase.from("admin_countries").select("id,name").order("name", { ascending: true }),
       supabase
         .from("admin_packages")
-        .select("id,country_id,name")
+        .select(
+          "id,country_id,name,theme_bg,theme_surface,theme_primary,theme_glow,theme_back"
+        )
         .order("name", { ascending: true }),
       supabase
         .from("admin_categories")
@@ -358,7 +347,9 @@ async function loadAdminConfig(): Promise<void> {
     }
     adminConfig = {
       countries: (ctryRes.data ?? []) as AdminCountry[],
-      packages: (pkgRes.data ?? []) as AdminPackage[],
+      packages: (pkgRes.data ?? [])
+        .map((row) => normalizePackage(row))
+        .filter((p): p is AdminPackage => p != null),
       categories: (catRes.data ?? []) as AdminCategory[],
       assignments: (rulesRes.data ?? []) as AdminConfig["assignments"],
       hiddenFilters: (filtersRes.data ?? []) as AdminConfig["hiddenFilters"],
@@ -601,10 +592,12 @@ function renderPackagesGrid(): void {
     card.type = "button";
     card.className = "vel-package-card";
     card.dataset.packageId = pkg.id;
+    card.setAttribute("aria-label", pkg.name);
 
     if (firstIcon) {
       const img = document.createElement("img");
       img.alt = "";
+      img.setAttribute("role", "presentation");
       img.src = proxiedUrl(firstIcon);
       img.addEventListener("error", () => {
         img.remove();
@@ -623,12 +616,7 @@ function renderPackagesGrid(): void {
       card.appendChild(em);
     }
 
-    const name = document.createElement("div");
-    name.className = "vel-package-card__name";
-    name.textContent = pkg.name;
-    card.appendChild(name);
-
-    card.addEventListener("click", () => openAdminPackage(pkg.id, pkg.name));
+    card.addEventListener("click", () => openAdminPackage(pkg.id));
     elPackagesView.appendChild(card);
   }
 
@@ -642,13 +630,15 @@ function renderPackagesGrid(): void {
   }
 }
 
-function openAdminPackage(packageId: string, packageName: string): void {
+function openAdminPackage(packageId: string): void {
   if (!state) return;
+  const pkg = adminConfig.packages.find((p) => p.id === packageId);
+  if (!pkg) return;
   uiShell = "content";
   uiTab = "live";
   uiAdminPackageId = packageId;
   setTabsActive("live");
-  applyTheme(themeKeyForLabel(packageName));
+  applyThemeForPackage(pkg);
   elPackagesView.classList.add("hidden");
   elMainTabs.classList.add("hidden");
   elContentView.classList.remove("hidden");
@@ -663,7 +653,7 @@ function goHome(): void {
   uiTab = "live";
   uiAdminPackageId = null;
   setTabsActive("live");
-  applyTheme("default");
+  applyPresetTheme("default");
   elPackagesView.classList.remove("hidden");
   elMainTabs.classList.remove("hidden");
   elContentView.classList.add("hidden");
@@ -677,7 +667,7 @@ function showVodPlaceholder(kind: "movies" | "series"): void {
   uiTab = kind;
   uiAdminPackageId = null;
   setTabsActive(kind);
-  applyTheme("default");
+  applyPresetTheme("default");
   elPackagesView.classList.add("hidden");
   elMainTabs.classList.remove("hidden");
   elContentView.classList.remove("hidden");
@@ -807,7 +797,7 @@ function disconnect(): void {
   elMainTabs.classList.remove("hidden");
   elCatPillsWrap.classList.add("hidden");
   setTabsActive("live");
-  applyTheme("default");
+  applyPresetTheme("default");
   elMain.classList.add("hidden");
   elLoginPanel.classList.remove("hidden");
   setLoginStatus("");

@@ -1106,6 +1106,92 @@ a.topbar__admin-link {
   background: rgba(168, 85, 247, 0.1);
 }
 
+.admin-list.admin-list--packages {
+  max-height: min(52vh, 420px);
+}
+
+.admin-list li.admin-package-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.admin-package-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.admin-package-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-package-theme {
+  width: 100%;
+}
+
+.admin-package-theme summary {
+  font-size: 0.7rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  list-style-position: outside;
+}
+
+.admin-package-theme summary::-webkit-details-marker {
+  color: var(--muted);
+}
+
+.admin-theme-grid {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 1fr) auto;
+  gap: 0.3rem 0.5rem;
+  align-items: center;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+}
+
+.admin-theme-grid__label {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.admin-theme-grid__color {
+  width: 2.35rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--bg-card);
+}
+
+.admin-theme-grid__text {
+  font-size: 0.7rem;
+  padding: 0.28rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+  min-width: 0;
+  max-width: 11rem;
+}
+
+.admin-theme-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
 .admin-list button {
   padding: 0.2rem 0.45rem;
   font-size: 0.68rem;
@@ -1317,6 +1403,8 @@ a.topbar__admin-link {
   --vel-text: #ffffff;
   --vel-muted: #8e8c9e;
   --vel-accent-glow: rgba(138, 43, 226, 0.3);
+  /* « Accueil » link (overridden per bouquet via inline --vel-back on .main). */
+  --vel-back: rgba(200, 192, 230, 0.88);
   --vel-transition: all 0.4s ease;
 
   display: flex;
@@ -1544,7 +1632,7 @@ a.topbar__admin-link {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0.85rem;
+  padding: 0.65rem;
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.06);
   transition:
@@ -1552,7 +1640,6 @@ a.topbar__admin-link {
     border-color 0.2s ease,
     box-shadow 0.2s ease;
   text-align: center;
-  gap: 0.4rem;
   color: var(--vel-text);
   font-family: Inter, var(--font);
   box-shadow:
@@ -1572,8 +1659,8 @@ a.topbar__admin-link {
 }
 
 .vel-package-card img {
-  width: 72%;
-  height: 72%;
+  width: 86%;
+  height: 86%;
   object-fit: contain;
   flex-shrink: 0;
 }
@@ -1581,17 +1668,6 @@ a.topbar__admin-link {
 .vel-package-card__emoji {
   font-size: 2.75rem;
   line-height: 1;
-}
-
-.vel-package-card__name {
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  padding: 0 0.2rem;
 }
 
 #content-view {
@@ -1611,7 +1687,7 @@ a.topbar__admin-link {
   border-radius: 0;
   border: none;
   background: transparent;
-  color: rgba(200, 192, 230, 0.88);
+  color: var(--vel-back, rgba(200, 192, 230, 0.88));
   font-weight: 600;
   font-size: 0.65rem;
   line-height: 1.2;
@@ -1620,15 +1696,15 @@ a.topbar__admin-link {
   font-family: Inter, var(--font);
   cursor: pointer;
   box-shadow: none;
-  transition: color 0.15s ease, transform 0.12s ease;
+  transition: color 0.15s ease, transform 0.12s ease, filter 0.15s ease;
 }
 
 .back-btn__icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(200, 185, 255, 0.95);
-  transition: color 0.18s ease, transform 0.18s ease;
+  color: var(--vel-back, rgba(200, 185, 255, 0.95));
+  transition: color 0.18s ease, transform 0.18s ease, filter 0.15s ease;
 }
 
 .back-btn__text {
@@ -1636,17 +1712,17 @@ a.topbar__admin-link {
 }
 
 .back-btn:hover {
-  color: rgba(245, 242, 255, 0.98);
+  filter: brightness(1.18);
   background: transparent;
 }
 
 .back-btn:hover .back-btn__icon {
-  color: rgba(230, 215, 255, 1);
   transform: translateX(-2px);
 }
 
 .back-btn:active {
   transform: scale(0.98);
+  filter: brightness(0.92);
 }
 
 .vel-cat-pills-wrap {

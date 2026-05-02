@@ -19,6 +19,11 @@ create table public.admin_packages (
   id uuid primary key default gen_random_uuid(),
   country_id uuid not null references public.admin_countries (id) on delete cascade,
   name text not null,
+  theme_bg text,
+  theme_surface text,
+  theme_primary text,
+  theme_glow text,
+  theme_back text,
   created_at timestamptz not null default now(),
   unique (country_id, name)
 );
@@ -64,3 +69,10 @@ on public.admin_channel_rules for all to anon, authenticated using (true) with c
 
 create policy "open read/write admin_hidden_filters"
 on public.admin_hidden_filters for all to anon, authenticated using (true) with check (true);
+
+-- Existing DBs: add theme columns (safe to re-run)
+alter table public.admin_packages add column if not exists theme_bg text;
+alter table public.admin_packages add column if not exists theme_surface text;
+alter table public.admin_packages add column if not exists theme_primary text;
+alter table public.admin_packages add column if not exists theme_glow text;
+alter table public.admin_packages add column if not exists theme_back text;

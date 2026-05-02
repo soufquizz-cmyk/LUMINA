@@ -1,7 +1,18 @@
 /** Country → package → category (leaf) → channel rules. Shared by player + admin. */
 
 export type AdminCountry = { id: string; name: string };
-export type AdminPackage = { id: string; country_id: string; name: string };
+export type AdminPackage = {
+  id: string;
+  country_id: string;
+  name: string;
+  /** Optional overrides; null/empty = use preset for that slot. */
+  theme_bg?: string | null;
+  theme_surface?: string | null;
+  theme_primary?: string | null;
+  theme_glow?: string | null;
+  /** « Accueil » / liens secondaires. */
+  theme_back?: string | null;
+};
 /** Leaf category (e.g. Sports) inside a package. */
 export type AdminCategory = { id: string; package_id: string; name: string };
 export type AdminAssignment = { id: string; match_text: string; category_id: string };
@@ -35,14 +46,33 @@ function isCountry(x: unknown): x is AdminCountry {
   );
 }
 
-function isPackage(x: unknown): x is AdminPackage {
-  return (
-    !!x &&
-    typeof x === "object" &&
-    typeof (x as AdminPackage).id === "string" &&
-    typeof (x as AdminPackage).country_id === "string" &&
-    typeof (x as AdminPackage).name === "string"
-  );
+function pickThemeStr(o: Record<string, unknown>, key: string): string | undefined {
+  const v = o[key];
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return t.length ? t : undefined;
+}
+
+export function normalizePackage(raw: unknown): AdminPackage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (
+    typeof o.id !== "string" ||
+    typeof o.country_id !== "string" ||
+    typeof o.name !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: o.id,
+    country_id: o.country_id,
+    name: o.name,
+    theme_bg: pickThemeStr(o, "theme_bg"),
+    theme_surface: pickThemeStr(o, "theme_surface"),
+    theme_primary: pickThemeStr(o, "theme_primary"),
+    theme_glow: pickThemeStr(o, "theme_glow"),
+    theme_back: pickThemeStr(o, "theme_back"),
+  };
 }
 
 function isCategoryLeaf(x: unknown): x is AdminCategory {
@@ -125,7 +155,9 @@ export function parseAdminConfig(raw: unknown): AdminConfig {
   if (looksLikeHierarchy) {
     return {
       countries: countryList.filter(isCountry),
-      packages: Array.isArray(o.packages) ? o.packages.filter(isPackage) : [],
+      packages: Array.isArray(o.packages)
+        ? o.packages.map(normalizePackage).filter((p): p is AdminPackage => p != null)
+        : [],
       categories: cats.filter(isCategoryLeaf),
       assignments: Array.isArray(o.assignments) ? o.assignments.filter(isAssignment) : [],
       hiddenFilters: Array.isArray(o.hiddenFilters) ? o.hiddenFilters.filter(isHidden) : [],

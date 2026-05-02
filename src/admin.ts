@@ -8,9 +8,11 @@ import {
   type AdminPackage,
   EMPTY_ADMIN_CONFIG,
   leafCategoryLabel,
+  normalizePackage,
   readAdminConfigFromLocalStorage,
   writeAdminConfigToLocalStorage,
 } from "./adminHierarchyConfig";
+import { presetForPackageName } from "./packageThemePresets";
 import {
   type LiveCategory,
   type LiveStream,
@@ -156,7 +158,9 @@ async function loadAdminConfig(): Promise<void> {
       supabase.from("admin_countries").select("id,name").order("name", { ascending: true }),
       supabase
         .from("admin_packages")
-        .select("id,country_id,name")
+        .select(
+          "id,country_id,name,theme_bg,theme_surface,theme_primary,theme_glow,theme_back"
+        )
         .order("name", { ascending: true }),
       supabase
         .from("admin_categories")
@@ -188,7 +192,9 @@ async function loadAdminConfig(): Promise<void> {
     }
     adminConfig = {
       countries: (ctryRes.data ?? []) as AdminCountry[],
-      packages: (pkgRes.data ?? []) as AdminPackage[],
+      packages: (pkgRes.data ?? [])
+        .map((row) => normalizePackage(row))
+        .filter((p): p is AdminPackage => p != null),
       categories: (catRes.data ?? []) as AdminCategory[],
       assignments: (rulesRes.data ?? []) as AdminConfig["assignments"],
       hiddenFilters: (filtersRes.data ?? []) as AdminConfig["hiddenFilters"],
@@ -485,6 +491,35 @@ function renderCountryList(): void {
   }
 }
 
+const DEFAULT_THEME_BACK_SWATCH = "#beb4dc";
+
+function normHex(c: string): string {
+  return c.trim().toLowerCase();
+}
+
+function colorOverrideOrNull(input: string, preset: string): string | null {
+  if (normHex(input) === normHex(preset)) return null;
+  const t = input.trim();
+  return t.length ? t : null;
+}
+
+function glowOverrideOrNull(input: string, preset: string): string | null {
+  if (input.trim() === preset.trim()) return null;
+  const t = input.trim();
+  return t.length ? t : null;
+}
+
+function mergedThemeForEditor(p: AdminPackage) {
+  const pr = presetForPackageName(p.name);
+  return {
+    bg: p.theme_bg?.trim() || pr.bg,
+    surface: p.theme_surface?.trim() || pr.surface,
+    primary: p.theme_primary?.trim() || pr.primary,
+    glow: p.theme_glow?.trim() || pr.glow,
+    back: p.theme_back?.trim() || DEFAULT_THEME_BACK_SWATCH,
+  };
+}
+
 function renderPackageList(): void {
   elPackageList.innerHTML = "";
   const cid = elPkgCountry.value;
@@ -493,11 +528,17 @@ function renderPackageList(): void {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   for (const p of pkgs) {
     const li = document.createElement("li");
-    li.textContent = p.name;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Delete";
-    btn.addEventListener("click", () => {
+    li.className = "admin-package-row";
+    const head = document.createElement("div");
+    head.className = "admin-package-row__head";
+    const title = document.createElement("span");
+    title.className = "admin-package-row__name";
+    title.textContent = p.name;
+    head.appendChild(title);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
       void (async () => {
         try {
           await deletePackage(p.id);
@@ -508,8 +549,153 @@ function renderPackageList(): void {
         }
       })();
     });
-    li.appendChild(btn);
+    head.appendChild(del);
+    li.appendChild(head);
+
+    const details = document.createElement("details");
+    details.className = "admin-package-theme";
+    const sum = document.createElement("summary");
+    sum.textContent = "Couleurs (fond, cartes, accent, halo, Accueil)";
+    details.appendChild(sum);
+
+    const m = mergedThemeForEditor(p);
+    const pr = presetForPackageName(p.name);
+    const grid = document.createElement("div");
+    grid.className = "admin-theme-grid";
+
+    const mkColorRow = (label: string, key: keyof ReturnType<typeof mergedThemeForEditor>, val: string) => {
+      const lab = document.createElement("label");
+      lab.textContent = label;
+      lab.className = "admin-theme-grid__label";
+      const inp = document.createElement("input");
+      inp.type = "color";
+      inp.className = "admin-theme-grid__color";
+      inp.dataset.themeKey = key;
+      inp.value = /^#[0-9a-fA-F]{6}$/.test(val) ? val : "#888888";
+      grid.appendChild(lab);
+      grid.appendChild(inp);
+    };
+
+    mkColorRow("Fond page", "bg", m.bg);
+    mkColorRow("Surfaces (listes)", "surface", m.surface);
+    mkColorRow("Accent", "primary", m.primary);
+
+    const glLab = document.createElement("label");
+    glLab.className = "admin-theme-grid__label";
+    glLab.textContent = "Halo (rgba ou #hex)";
+    const glIn = document.createElement("input");
+    glIn.type = "text";
+    glIn.className = "admin-theme-grid__text";
+    glIn.dataset.themeKey = "glow";
+    glIn.value = m.glow;
+    glIn.placeholder = pr.glow;
+    grid.appendChild(glLab);
+    grid.appendChild(glIn);
+
+    mkColorRow("Texte « Accueil »", "back", m.back);
+
+    const actions = document.createElement("div");
+    actions.className = "admin-theme-actions";
+    const btnSave = document.createElement("button");
+    btnSave.type = "button";
+    btnSave.className = "primary";
+    btnSave.textContent = "Enregistrer couleurs";
+    btnSave.addEventListener("click", () => {
+      void (async () => {
+        const g = (sel: string) =>
+          grid.querySelector<HTMLInputElement>(`[data-theme-key="${sel}"]`)!;
+        const backVal = g("back").value.trim();
+        const patch = {
+          theme_bg: colorOverrideOrNull(g("bg").value, pr.bg),
+          theme_surface: colorOverrideOrNull(g("surface").value, pr.surface),
+          theme_primary: colorOverrideOrNull(g("primary").value, pr.primary),
+          theme_glow: glowOverrideOrNull(g("glow").value, pr.glow),
+          theme_back:
+            !backVal || normHex(backVal) === normHex(DEFAULT_THEME_BACK_SWATCH)
+              ? null
+              : backVal,
+        };
+        try {
+          await updatePackageThemeColors(p.id, patch);
+          renderAdminLists();
+          adminStatus("Couleurs du bouquet enregistrées.");
+        } catch (e) {
+          adminStatus(e instanceof Error ? e.message : String(e), true);
+        }
+      })();
+    });
+    const btnReset = document.createElement("button");
+    btnReset.type = "button";
+    btnReset.textContent = "Réinitialiser";
+    btnReset.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await updatePackageThemeColors(p.id, {
+            theme_bg: null,
+            theme_surface: null,
+            theme_primary: null,
+            theme_glow: null,
+            theme_back: null,
+          });
+          renderAdminLists();
+          adminStatus("Couleurs par défaut (préréglage nom du bouquet).");
+        } catch (e) {
+          adminStatus(e instanceof Error ? e.message : String(e), true);
+        }
+      })();
+    });
+    actions.appendChild(btnSave);
+    actions.appendChild(btnReset);
+    grid.appendChild(actions);
+
+    details.appendChild(grid);
+    li.appendChild(details);
     elPackageList.appendChild(li);
+  }
+}
+
+async function updatePackageThemeColors(
+  packageId: string,
+  patch: {
+    theme_bg: string | null;
+    theme_surface: string | null;
+    theme_primary: string | null;
+    theme_glow: string | null;
+    theme_back: string | null;
+  }
+): Promise<void> {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("admin_packages")
+      .update(patch)
+      .eq("id", packageId)
+      .select(
+        "id,country_id,name,theme_bg,theme_surface,theme_primary,theme_glow,theme_back"
+      )
+      .single();
+    if (error) throw error;
+    const row = normalizePackage(data);
+    const idx = adminConfig.packages.findIndex((x) => x.id === packageId);
+    if (idx >= 0 && row) adminConfig.packages[idx] = row;
+  } else {
+    const idx = adminConfig.packages.findIndex((x) => x.id === packageId);
+    if (idx >= 0) {
+      const cur = adminConfig.packages[idx]!;
+      const q: Record<string, unknown> = { ...(cur as unknown as Record<string, unknown>) };
+      for (const k of [
+        "theme_bg",
+        "theme_surface",
+        "theme_primary",
+        "theme_glow",
+        "theme_back",
+      ] as const) {
+        if (patch[k] === null) delete q[k];
+        else if (typeof patch[k] === "string" && patch[k].length > 0) q[k] = patch[k];
+      }
+      const merged = normalizePackage(q);
+      if (merged) adminConfig.packages[idx] = merged;
+    }
+    writeAdminConfigToLocalStorage(adminConfig);
   }
 }
 
@@ -610,10 +796,12 @@ async function addPackage(countryId: string, name: string): Promise<void> {
     const { data, error } = await supabase
       .from("admin_packages")
       .insert({ country_id: countryId, name: trimmed })
-      .select("id,country_id,name")
+      .select(
+        "id,country_id,name,theme_bg,theme_surface,theme_primary,theme_glow,theme_back"
+      )
       .single();
     if (error) throw error;
-    adminConfig.packages.push(data as AdminPackage);
+    adminConfig.packages.push(normalizePackage(data)!);
   } else {
     adminConfig.packages.push({
       id: nextLocalId("pkg"),

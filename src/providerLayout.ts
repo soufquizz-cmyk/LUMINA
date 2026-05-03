@@ -21,6 +21,8 @@ const ISO_NAMES: Record<string, string> = {
   US: "États-Unis",
   GB: "Royaume-Uni",
   UK: "Royaume-Uni",
+  /** IPTV VOD buckets: “English”, not ISO3166 alpha-2. */
+  EN: "United Kingdom",
   DE: "Allemagne",
   ES: "Espagne",
   IT: "Italie",
@@ -198,6 +200,45 @@ export function inferCountryFromCategoryName(name: string): ParsedCountry | null
     return matchCanonicalCountry(countryLabelFromCode(code));
   }
 
+  const fromTrail = inferFromTrailingRegionBracket(t);
+  if (fromTrail) return fromTrail;
+
+  return null;
+}
+
+/** Suffixe `… [FR]`, `… [PL]`, `… [ALB]` (très courant sur les catégories VOD Xtream). */
+const TRAILING_BRACKET_DENY = new Set([
+  "MULTISUB",
+  "MULTI",
+  "SUB",
+  "DTS",
+  "HDR",
+  "SDR",
+  "UHD",
+  "FHD",
+  "HD",
+  "TS",
+  "HQ",
+  "XXX",
+]);
+
+function inferFromTrailingRegionBracket(name: string): ParsedCountry | null {
+  const m = /\[\s*([A-Za-z]{2,3})\s*\]\s*$/i.exec(name.trim());
+  if (!m) return null;
+  const raw = (m[1] ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (raw.length < 2 || raw.length > 3) return null;
+  if (TRAILING_BRACKET_DENY.has(raw)) return null;
+
+  /** ISO `AF` = Afghanistan ; sur l’IPTV, « AFRICAN … [AF] » = zone Afrique. */
+  if (raw === "AF" && /\bafrican(s)?\b/i.test(name)) {
+    return matchCanonicalCountry("Afrique");
+  }
+
+  const fromIso = countryLabelFromIsoTag(raw);
+  if (fromIso) {
+    const hit = matchCanonicalCountry(fromIso);
+    if (hit) return hit;
+  }
   return null;
 }
 

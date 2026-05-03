@@ -28,6 +28,8 @@ import {
   type LiveCategory,
   type LiveStream,
   tryNodecastLoginAndLoad,
+  fetchNodecastVodCatalog,
+  fetchNodecastSeriesCatalog,
   resolveNodecastStreamUrl,
   resolveNodecastVodStreamUrl,
   resolveNodecastSeriesPlayableUrl,
@@ -239,6 +241,9 @@ let state: {
   vodStreamsByCat: Map<string, LiveStream[]>;
   seriesCategories: LiveCategory[];
   seriesStreamsByCat: Map<string, LiveStream[]>;
+  /** VOD / séries ne sont chargés qu’à l’ouverture des onglets (pas au login). */
+  vodCatalogLoaded: boolean;
+  seriesCatalogLoaded: boolean;
 } | null = null;
 
 let hls: Hls | null = null;
@@ -1948,7 +1953,10 @@ function countStreamsInMap(m: Map<string, LiveStream[]>): number {
   return n;
 }
 
-function showVodPlaceholder(kind: "movies" | "series", reason: "no-nodecast" | "empty" = "no-nodecast"): void {
+function showVodPlaceholder(
+  kind: "movies" | "series",
+  reason: "no-nodecast" | "no-xtream-source" | "empty" = "no-nodecast"
+): void {
   uiShell = "content";
   uiTab = kind;
   uiAdminPackageId = null;
@@ -1966,6 +1974,11 @@ function showVodPlaceholder(kind: "movies" | "series", reason: "no-nodecast" | "
       kind === "movies"
         ? "Aucun <strong>film</strong> (VOD) dans le catalogue pour cette source Xtream."
         : "Aucune <strong>série</strong> dans le catalogue pour cette source Xtream.";
+  } else if (reason === "no-xtream-source") {
+    msg.innerHTML =
+      kind === "movies"
+        ? "Impossible de déterminer la <strong>source Xtream</strong> pour charger les films (catalogue live sans proxy <code>api/proxy/xtream</code>)."
+        : "Impossible de déterminer la <strong>source Xtream</strong> pour charger les séries (catalogue live sans proxy <code>api/proxy/xtream</code>).";
   } else {
     msg.innerHTML =
       kind === "movies"
@@ -1976,10 +1989,61 @@ function showVodPlaceholder(kind: "movies" | "series", reason: "no-nodecast" | "
 }
 
 function openNodecastMediaShell(tab: "movies" | "series"): void {
+  void openNodecastMediaShellAsync(tab);
+}
+
+async function openNodecastMediaShellAsync(tab: "movies" | "series"): Promise<void> {
   if (!state || state.mode !== "nodecast") {
     showVodPlaceholder(tab, "no-nodecast");
     return;
   }
+  const sid = state.nodecastXtreamSourceId?.trim();
+  if (!sid) {
+    showVodPlaceholder(tab, "no-xtream-source");
+    return;
+  }
+
+  if (tab === "movies" && !state.vodCatalogLoaded) {
+    setCatalogLoadingVisible(true, "Chargement des films…");
+    try {
+      const v = await fetchNodecastVodCatalog(state.base, sid, state.nodecastAuthHeaders);
+      if (!state) return;
+      state.vodCategories = v?.categories ?? [];
+      state.vodStreamsByCat = v?.streamsByCat ?? new Map();
+      state.vodCatalogLoaded = true;
+      vodAdminConfig = buildProviderAdminConfig(state.vodCategories, state.vodStreamsByCat);
+    } catch {
+      if (state) {
+        state.vodCategories = [];
+        state.vodStreamsByCat = new Map();
+        state.vodCatalogLoaded = true;
+        vodAdminConfig = buildProviderAdminConfig([], new Map());
+      }
+    } finally {
+      setCatalogLoadingVisible(false);
+    }
+  } else if (tab === "series" && !state.seriesCatalogLoaded) {
+    setCatalogLoadingVisible(true, "Chargement des séries…");
+    try {
+      const s = await fetchNodecastSeriesCatalog(state.base, sid, state.nodecastAuthHeaders);
+      if (!state) return;
+      state.seriesCategories = s?.categories ?? [];
+      state.seriesStreamsByCat = s?.streamsByCat ?? new Map();
+      state.seriesCatalogLoaded = true;
+      seriesAdminConfig = buildProviderAdminConfig(state.seriesCategories, state.seriesStreamsByCat);
+    } catch {
+      if (state) {
+        state.seriesCategories = [];
+        state.seriesStreamsByCat = new Map();
+        state.seriesCatalogLoaded = true;
+        seriesAdminConfig = buildProviderAdminConfig([], new Map());
+      }
+    } finally {
+      setCatalogLoadingVisible(false);
+    }
+  }
+
+  if (!state) return;
   const map = tab === "movies" ? state.vodStreamsByCat : state.seriesStreamsByCat;
   if (countStreamsInMap(map) === 0) {
     showVodPlaceholder(tab, "empty");
@@ -2079,7 +2143,7 @@ async function connect(): Promise<void> {
     setCatalogLoadingVisible(true, "Connexion au serveur…");
     const mode: "nodecast" = "nodecast";
     const nodecast = await tryNodecastLoginAndLoad(base, username, password);
-    setCatalogLoadingVisible(true, "Synchronisation du catalogue…");
+    setCatalogLoadingVisible(true, "Préparation de l’accueil…");
     const streamsByCat = nodecast.streamsByCat;
     const nodecastAuthHeaders = nodecast.authHeaders;
     const serverInfo: ServerInfo = {
@@ -2109,6 +2173,8 @@ async function connect(): Promise<void> {
       vodStreamsByCat: nodecast.vodStreamsByCat,
       seriesCategories: nodecast.seriesCategories,
       seriesStreamsByCat: nodecast.seriesStreamsByCat,
+      vodCatalogLoaded: false,
+      seriesCatalogLoaded: false,
     };
 
     selectedPillId = "all";

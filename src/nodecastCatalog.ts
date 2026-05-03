@@ -523,6 +523,24 @@ function mapNodecastSeriesToStream(
   };
 }
 
+/** Lazy-load VOD (Films) after login — not called during initial DIRECT TV load. */
+export async function fetchNodecastVodCatalog(
+  base: string,
+  sourceId: string,
+  headers?: Record<string, string>
+): Promise<{ categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } | null> {
+  return loadXtreamVodCatalog(base, sourceId, headers);
+}
+
+/** Lazy-load séries after login — not called during initial DIRECT TV load. */
+export async function fetchNodecastSeriesCatalog(
+  base: string,
+  sourceId: string,
+  headers?: Record<string, string>
+): Promise<{ categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } | null> {
+  return loadXtreamSeriesCatalog(base, sourceId, headers);
+}
+
 async function loadXtreamVodCatalog(
   base: string,
   sourceId: string,
@@ -610,30 +628,6 @@ async function loadXtreamSeriesCatalog(
   if (!allSeries.length) return null;
   const categories = seriesCats.length ? seriesCats : categoriesFromStreams(allSeries);
   return { categories, streamsByCat: groupStreamsByCategory(allSeries) };
-}
-
-async function loadVodAndSeriesCatalogs(
-  base: string,
-  sourceId: string,
-  headers?: Record<string, string>
-): Promise<{
-  nodecastXtreamSourceId: string;
-  vodCategories: LiveCategory[];
-  vodStreamsByCat: Map<string, LiveStream[]>;
-  seriesCategories: LiveCategory[];
-  seriesStreamsByCat: Map<string, LiveStream[]>;
-}> {
-  const [vod, series] = await Promise.all([
-    loadXtreamVodCatalog(base, sourceId, headers),
-    loadXtreamSeriesCatalog(base, sourceId, headers),
-  ]);
-  return {
-    nodecastXtreamSourceId: sourceId,
-    vodCategories: vod?.categories ?? [],
-    vodStreamsByCat: vod?.streamsByCat ?? new Map(),
-    seriesCategories: series?.categories ?? [],
-    seriesStreamsByCat: series?.streamsByCat ?? new Map(),
-  };
 }
 
 export async function tryNodecastLoginAndLoad(
@@ -725,16 +719,15 @@ export async function tryNodecastLoginAndLoad(
           })
           .filter((c): c is LiveCategory => c != null);
         const categories = mappedCats.length ? mappedCats : categoriesFromStreams(streams);
-        const media = await loadVodAndSeriesCatalogs(base, sourceId, nodecastAuthHeaders);
         return {
           categories,
           streamsByCat: groupStreamsByCategory(streams),
           authHeaders: nodecastAuthHeaders,
-          nodecastXtreamSourceId: media.nodecastXtreamSourceId,
-          vodCategories: media.vodCategories,
-          vodStreamsByCat: media.vodStreamsByCat,
-          seriesCategories: media.seriesCategories,
-          seriesStreamsByCat: media.seriesStreamsByCat,
+          nodecastXtreamSourceId: sourceId,
+          vodCategories: [],
+          vodStreamsByCat: new Map(),
+          seriesCategories: [],
+          seriesStreamsByCat: new Map(),
         };
       } catch {
         // try next source id
@@ -747,22 +740,17 @@ export async function tryNodecastLoginAndLoad(
   const categories = categoriesFromStreams(streams);
   const discovered = await discoverXtreamSourceIdsInternal(base, nodecastAuthHeaders);
   const tryIds = discovered.length ? discovered : ["9"];
-  let mediaExtras = await loadVodAndSeriesCatalogs(base, tryIds[0], nodecastAuthHeaders);
-  for (let i = 1; i < tryIds.length; i++) {
-    if (mediaExtras.vodStreamsByCat.size > 0 || mediaExtras.seriesStreamsByCat.size > 0) {
-      break;
-    }
-    mediaExtras = await loadVodAndSeriesCatalogs(base, tryIds[i], nodecastAuthHeaders);
-  }
+  const fromStream = streams.map((s) => s.nodecast_source_id?.trim()).find(Boolean);
+  const nodecastXtreamSourceId = fromStream || tryIds[0];
   return {
     categories,
     streamsByCat: groupStreamsByCategory(streams),
     authHeaders: nodecastAuthHeaders,
-    nodecastXtreamSourceId: mediaExtras.nodecastXtreamSourceId,
-    vodCategories: mediaExtras.vodCategories,
-    vodStreamsByCat: mediaExtras.vodStreamsByCat,
-    seriesCategories: mediaExtras.seriesCategories,
-    seriesStreamsByCat: mediaExtras.seriesStreamsByCat,
+    nodecastXtreamSourceId,
+    vodCategories: [],
+    vodStreamsByCat: new Map(),
+    seriesCategories: [],
+    seriesStreamsByCat: new Map(),
   };
 }
 

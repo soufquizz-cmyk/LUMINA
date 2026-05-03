@@ -4,8 +4,6 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import busboy from "busboy";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 /** Multipart body can exceed file size (boundaries); keep a hard cap for buffering. */
@@ -87,8 +85,14 @@ function readEnv(env: NodeJS.ProcessEnv): {
   return { accountId, accessKeyId, secretAccessKey, bucket, publicBase, uploadSecrets };
 }
 
-function s3Client(cfg: NonNullable<ReturnType<typeof readEnv>>): S3Client {
-  return new S3Client({
+async function putObjectToR2(
+  cfg: NonNullable<ReturnType<typeof readEnv>>,
+  key: string,
+  body: Buffer,
+  contentType: string
+): Promise<{ ok: true } | { error: string }> {
+  const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+  const client = new S3Client({
     region: "auto",
     endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
     credentials: {
@@ -97,6 +101,19 @@ function s3Client(cfg: NonNullable<ReturnType<typeof readEnv>>): S3Client {
     },
     forcePathStyle: true,
   });
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      })
+    );
+    return { ok: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "R2 put failed" };
+  }
 }
 
 function authorize(req: IncomingMessage, uploadSecrets: string[]): boolean {
@@ -133,6 +150,11 @@ export async function handleR2PackageCoverRoute(
     if (req.method === "OPTIONS") {
       res.writeHead(204, corsJsonHeaders());
       res.end();
+      return;
+    }
+
+    if (req.method === "GET") {
+      json(res, 200, { ok: true, service: "r2-package-cover" });
       return;
     }
 
@@ -182,7 +204,7 @@ export async function handleR2PackageCoverRoute(
       return;
     }
 
-    const parsed = await parseMultipart(bodyRead.buffer, ct);
+    const parsed = await parseMultipartAsync(bodyRead.buffer, ct);
     if ("error" in parsed) {
       logDebug(env, "multipart error", { status: parsed.status, error: parsed.error });
       json(res, parsed.status, { error: parsed.error });
@@ -202,20 +224,10 @@ export async function handleR2PackageCoverRoute(
     const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
     const contentType = mime || (ext === "jpg" ? "image/jpeg" : `image/${ext}`);
 
-    const client = s3Client(cfg);
-    try {
-      await client.send(
-        new PutObjectCommand({
-          Bucket: cfg.bucket,
-          Key: key,
-          Body: fileBuffer,
-          ContentType: contentType,
-        })
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "R2 put failed";
-      logDebug(env, "PutObject failed", { key, message: msg });
-      json(res, 500, { error: msg });
+    const put = await putObjectToR2(cfg, key, fileBuffer, contentType);
+    if ("error" in put) {
+      logDebug(env, "PutObject failed", { key, message: put.error });
+      json(res, 500, { error: put.error });
       return;
     }
 
@@ -259,10 +271,12 @@ async function readRequestBodyBuffer(req: IncomingMessage): Promise<{ buffer: Bu
   return { buffer: Buffer.concat(chunks) };
 }
 
-/** Buffer first: `req.pipe(busboy)` often hangs on Vercel’s request stream. */
-function parseMultipart(body: Buffer, contentType: string): Promise<ParseOk | ParseErr> {
+/** Buffer first; busboy loaded lazily (smaller Vercel cold bundle). */
+async function parseMultipartAsync(body: Buffer, contentType: string): Promise<ParseOk | ParseErr> {
+  const busboyMod = await import("busboy");
+  const busboyFactory = busboyMod.default;
   return new Promise((resolve) => {
-    const bb = busboy({
+    const bb = busboyFactory({
       headers: { "content-type": contentType },
       limits: { fileSize: MAX_BYTES },
     });

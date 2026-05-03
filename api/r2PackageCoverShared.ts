@@ -3,11 +3,20 @@
  * Used by Vite dev/preview middleware and Vercel `api/r2-package-cover.ts`.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import busboy from "busboy";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 const MAX_BYTES = 2 * 1024 * 1024;
+/** Multipart body can exceed file size (boundaries); keep a hard cap for buffering. */
+const MAX_BODY_BYTES = MAX_BYTES + 512 * 1024;
 const ROUTE_PREFIX = "/api/r2-package-cover";
+
+function headerString(req: IncomingMessage, name: string): string {
+  const v = req.headers[name.toLowerCase()];
+  if (v == null) return "";
+  return Array.isArray(v) ? String(v[0] ?? "").trim() : String(v).trim();
+}
 
 function debugPackageCover(env: NodeJS.ProcessEnv): boolean {
   const v = (env.VITE_DEBUG_PACKAGE_COVER ?? "").trim().toLowerCase();
@@ -92,9 +101,9 @@ function s3Client(cfg: NonNullable<ReturnType<typeof readEnv>>): S3Client {
 
 function authorize(req: IncomingMessage, uploadSecrets: string[]): boolean {
   if (!uploadSecrets.length) return true;
-  const auth = req.headers.authorization ?? "";
+  const auth = headerString(req, "authorization");
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  const headerKey = (req.headers["x-upload-key"] as string | undefined)?.trim() ?? "";
+  const headerKey = headerString(req, "x-upload-key");
   return uploadSecrets.some((s) => s === bearer || s === headerKey);
 }
 
@@ -120,89 +129,107 @@ export async function handleR2PackageCoverRoute(
   res: ServerResponse,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, corsJsonHeaders());
-    res.end();
-    return;
-  }
-
-  if (req.method !== "POST") {
-    logDebug(env, "reject non-POST", { method: req.method });
-    json(res, 405, { error: "Method not allowed" });
-    return;
-  }
-
-  const cfg = readEnv(env);
-  if (!cfg) {
-    logDebug(env, "R2 env incomplete", {
-      hasAccountId: Boolean(env.R2_ACCOUNT_ID?.trim()),
-      hasAccessKey: Boolean(env.R2_ACCESS_KEY_ID?.trim()),
-      hasSecret: Boolean(env.R2_SECRET_ACCESS_KEY?.trim()),
-      hasBucket: Boolean(env.R2_BUCKET_NAME?.trim()),
-    });
-    json(res, 503, { error: "R2 is not configured (set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME)." });
-    return;
-  }
-
-  logDebug(env, "R2 config", {
-    bucket: cfg.bucket,
-    publicBase: cfg.publicBase,
-    authRequired: cfg.uploadSecrets.length > 0,
-  });
-
-  if (!authorize(req, cfg.uploadSecrets)) {
-    logDebug(env, "401 missing or wrong bearer / X-Upload-Key");
-    json(res, 401, { error: "Unauthorized" });
-    return;
-  }
-
-  const ct = req.headers["content-type"] ?? "";
-  if (typeof ct !== "string" || !ct.includes("multipart/form-data")) {
-    json(res, 400, { error: "Expected multipart/form-data" });
-    return;
-  }
-
-  const parsed = await parseMultipart(req, ct);
-  if ("error" in parsed) {
-    logDebug(env, "multipart error", { status: parsed.status, error: parsed.error });
-    json(res, parsed.status, { error: parsed.error });
-    return;
-  }
-
-  const { fileBuffer, fileName, mime, packageId } = parsed;
-  logDebug(env, "parsed multipart", {
-    packageId,
-    fileName,
-    mime,
-    bytes: fileBuffer.length,
-  });
-  const rawExt = (fileName.split(".").pop() || "jpg").toLowerCase();
-  const ext = /^[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : "jpg";
-  const folder = sanitizePackagePrefix(packageId);
-  const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
-  const contentType = mime || (ext === "jpg" ? "image/jpeg" : `image/${ext}`);
-
-  const client = s3Client(cfg);
   try {
-    await client.send(
-      new PutObjectCommand({
-        Bucket: cfg.bucket,
-        Key: key,
-        Body: fileBuffer,
-        ContentType: contentType,
-      })
-    );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "R2 put failed";
-    logDebug(env, "PutObject failed", { key, message: msg });
-    json(res, 500, { error: msg });
-    return;
-  }
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsJsonHeaders());
+      res.end();
+      return;
+    }
 
-  const pathEnc = key.split("/").map(encodeURIComponent).join("/");
-  const url = `${cfg.publicBase}/${pathEnc}`;
-  logDebug(env, "PutObject ok", { key, url });
-  json(res, 200, { url });
+    if (req.method !== "POST") {
+      logDebug(env, "reject non-POST", { method: req.method });
+      json(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    const cfg = readEnv(env);
+    if (!cfg) {
+      logDebug(env, "R2 env incomplete", {
+        hasAccountId: Boolean(env.R2_ACCOUNT_ID?.trim()),
+        hasAccessKey: Boolean(env.R2_ACCESS_KEY_ID?.trim()),
+        hasSecret: Boolean(env.R2_SECRET_ACCESS_KEY?.trim()),
+        hasBucket: Boolean(env.R2_BUCKET_NAME?.trim()),
+      });
+      json(res, 503, {
+        error:
+          "R2 is not configured (set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME).",
+      });
+      return;
+    }
+
+    logDebug(env, "R2 config", {
+      bucket: cfg.bucket,
+      publicBase: cfg.publicBase,
+      authRequired: cfg.uploadSecrets.length > 0,
+    });
+
+    if (!authorize(req, cfg.uploadSecrets)) {
+      logDebug(env, "401 missing or wrong bearer / X-Upload-Key");
+      json(res, 401, { error: "Unauthorized" });
+      return;
+    }
+
+    const ct = headerString(req, "content-type");
+    if (!ct.includes("multipart/form-data")) {
+      json(res, 400, { error: "Expected multipart/form-data" });
+      return;
+    }
+
+    const bodyRead = await readRequestBodyBuffer(req);
+    if ("error" in bodyRead) {
+      logDebug(env, "body read error", bodyRead);
+      json(res, bodyRead.status, { error: bodyRead.error });
+      return;
+    }
+
+    const parsed = await parseMultipart(bodyRead.buffer, ct);
+    if ("error" in parsed) {
+      logDebug(env, "multipart error", { status: parsed.status, error: parsed.error });
+      json(res, parsed.status, { error: parsed.error });
+      return;
+    }
+
+    const { fileBuffer, fileName, mime, packageId } = parsed;
+    logDebug(env, "parsed multipart", {
+      packageId,
+      fileName,
+      mime,
+      bytes: fileBuffer.length,
+    });
+    const rawExt = (fileName.split(".").pop() || "jpg").toLowerCase();
+    const ext = /^[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : "jpg";
+    const folder = sanitizePackagePrefix(packageId);
+    const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+    const contentType = mime || (ext === "jpg" ? "image/jpeg" : `image/${ext}`);
+
+    const client = s3Client(cfg);
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: cfg.bucket,
+          Key: key,
+          Body: fileBuffer,
+          ContentType: contentType,
+        })
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "R2 put failed";
+      logDebug(env, "PutObject failed", { key, message: msg });
+      json(res, 500, { error: msg });
+      return;
+    }
+
+    const pathEnc = key.split("/").map(encodeURIComponent).join("/");
+    const url = `${cfg.publicBase}/${pathEnc}`;
+    logDebug(env, "PutObject ok", { key, url });
+    json(res, 200, { url });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[package-cover:r2] unhandled", msg, e instanceof Error ? e.stack : "");
+    if (!res.headersSent) {
+      json(res, 500, { error: msg });
+    }
+  }
 }
 
 type ParseOk = {
@@ -214,7 +241,26 @@ type ParseOk = {
 
 type ParseErr = { error: string; status: number };
 
-function parseMultipart(req: IncomingMessage, contentType: string): Promise<ParseOk | ParseErr> {
+async function readRequestBodyBuffer(req: IncomingMessage): Promise<{ buffer: Buffer } | ParseErr> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of req) {
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += b.length;
+      if (total > MAX_BODY_BYTES) {
+        return { error: "Corps de requête trop volumineux.", status: 413 };
+      }
+      chunks.push(b);
+    }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Lecture du corps impossible.", status: 400 };
+  }
+  return { buffer: Buffer.concat(chunks) };
+}
+
+/** Buffer first: `req.pipe(busboy)` often hangs on Vercel’s request stream. */
+function parseMultipart(body: Buffer, contentType: string): Promise<ParseOk | ParseErr> {
   return new Promise((resolve) => {
     const bb = busboy({
       headers: { "content-type": contentType },
@@ -268,6 +314,6 @@ function parseMultipart(req: IncomingMessage, contentType: string): Promise<Pars
       });
     });
 
-    req.pipe(bb);
+    Readable.from(body).pipe(bb);
   });
 }

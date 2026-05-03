@@ -128,12 +128,111 @@ function asArray(payload: unknown): unknown[] {
   if (Array.isArray(o.favoriteSeries)) return o.favoriteSeries;
   if (Array.isArray(o.favorite_series)) return o.favorite_series;
   if (Array.isArray(o.series_list)) return o.series_list;
+  /** Some forks expose series rows under `js` (PHP array name). */
+  if (Array.isArray(o.js)) return o.js;
   /** Some panels wrap lists in `data: { series: [...] }` (non-array `data`). */
   if (o.data && typeof o.data === "object" && !Array.isArray(o.data)) {
     const nested = asArray(o.data);
     if (nested.length) return nested;
   }
   return [];
+}
+
+/**
+ * Many Xtream-style panels return `get_series` as an object whose keys are category ids and
+ * values are arrays of series rows — not a flat array. Flatten those into one list (with
+ * `category_id` filled from the key when missing).
+ */
+function tryFlattenCategoryKeyedSeriesMap(p: unknown): unknown[] | null {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  const o = p as Record<string, unknown>;
+  const metaKeys = new Set([
+    "success",
+    "user_info",
+    "server_info",
+    "categories",
+    "episodes",
+    "seasons",
+    "info",
+    "message",
+    "error",
+    "status",
+  ]);
+  const buckets: { key: string; rows: unknown[] }[] = [];
+  for (const [k, v] of Object.entries(o)) {
+    if (metaKeys.has(k.toLowerCase())) continue;
+    if (!Array.isArray(v) || v.length < 1) continue;
+    const first = v[0];
+    if (!first || typeof first !== "object" || Array.isArray(first)) continue;
+    const r = first as Record<string, unknown>;
+    const looks =
+      r.series_id != null ||
+      r.seriesId != null ||
+      r.stream_id != null ||
+      r.streamId != null ||
+      (typeof r.name === "string" && r.name.trim().length > 0) ||
+      (typeof r.title === "string" && r.title.trim().length > 0) ||
+      (typeof r.series_name === "string" && r.series_name.trim().length > 0);
+    if (!looks) continue;
+    if (/^\d+$/.test(k)) buckets.push({ key: k, rows: v });
+  }
+  if (!buckets.length) return null;
+  const out: unknown[] = [];
+  for (const { key, rows } of buckets) {
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const ro = row as Record<string, unknown>;
+      out.push({
+        ...ro,
+        category_id: ro.category_id ?? ro.category_ids ?? key,
+      });
+    }
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * Liste de lignes séries / favoris : `asArray` + chaînes JSON, clés `result`/`response`/`body`,
+ * et objets « map » dont les valeurs ressemblent à des lignes Xtream.
+ */
+function seriesListFromPayload(payload: unknown, depth = 0): unknown[] {
+  if (depth > 8) return [];
+  let p: unknown = payload;
+  if (typeof p === "string") {
+    const t = p.trim();
+    if (!t.startsWith("{") && !t.startsWith("[")) return [];
+    try {
+      p = JSON.parse(t) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  const fromCatMap = tryFlattenCategoryKeyedSeriesMap(p);
+  if (fromCatMap?.length) return fromCatMap;
+  const direct = asArray(p);
+  if (direct.length) return direct;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return [];
+  const o = p as Record<string, unknown>;
+  for (const key of ["data", "result", "response", "body", "value", "series"]) {
+    const inner = o[key];
+    if (inner == null || typeof inner !== "object") continue;
+    const got = seriesListFromPayload(inner, depth + 1);
+    if (got.length) return got;
+  }
+  const vals = Object.values(o);
+  if (vals.length < 1 || vals.length > 100_000) return [];
+  const first = vals[0];
+  if (!first || typeof first !== "object" || Array.isArray(first)) return [];
+  const r = first as Record<string, unknown>;
+  const looksLikeSeriesRow =
+    r.series_id != null ||
+    r.seriesId != null ||
+    r.stream_id != null ||
+    typeof r.name === "string" ||
+    typeof r.title === "string";
+  if (!looksLikeSeriesRow) return [];
+  const allRecords = vals.every((v) => v != null && typeof v === "object" && !Array.isArray(v));
+  return allRecords ? vals : [];
 }
 
 function canonicalHttpUrlFromMaybeEncoded(raw: string): string {
@@ -748,12 +847,12 @@ async function loadXtreamSeriesCatalog(
   headers?: Record<string, string>
 ): Promise<{ categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } | null> {
   const sid = encodeURIComponent(sourceId);
+  const root = `${base}/api/proxy/xtream/${sid}`;
   let seriesCats: LiveCategory[] = [];
   try {
-    const catPayload = await fetchProxiedJsonWithInit<unknown>(
-      `${base}/api/proxy/xtream/${sid}/series_categories`,
-      { headers }
-    );
+    const catPayload = await fetchProxiedJsonWithInit<unknown>(`${root}/series_categories`, {
+      headers,
+    });
     seriesCats = asArray(catPayload)
       .map(mapXtreamCategoryRow)
       .filter((c): c is LiveCategory => c != null);
@@ -761,32 +860,66 @@ async function loadXtreamSeriesCatalog(
     /* categories optional if get_series returns all */
   }
 
-  let allSeries: LiveStream[] = [];
-  try {
-    const bulk = await fetchProxiedJsonWithInit<unknown>(`${base}/api/proxy/xtream/${sid}/get_series`, {
-      headers,
-    });
-    const arr = asArray(bulk);
-    allSeries = arr
-      .map((item, idx) => mapNodecastSeriesToStream(item, idx, sourceId))
+  const mapChunk = (payload: unknown, defaultCat?: string): LiveStream[] =>
+    seriesListFromPayload(payload)
+      .map((item, idx) => mapNodecastSeriesToStream(item, idx, sourceId, defaultCat))
       .filter((s): s is LiveStream => s != null);
-  } catch {
-    /* try per-category */
+
+  /** Plusieurs panels / proxys refusent `get_series` sans `category_id` (400) — variantes par catégorie. */
+  function seriesUrlsForCategory(categoryId: string): string[] {
+    const enc = encodeURIComponent(categoryId);
+    return [
+      /** Nodecast-style REST (same panel as `series_categories`). */
+      `${root}/series?category_id=${enc}`,
+      `${root}/series?cat_id=${enc}`,
+      `${root}/series/${enc}`,
+      `${root}/get_series?category_id=${enc}`,
+      `${root}/get_series?cat_id=${enc}`,
+      `${root}/get_series?category=${enc}`,
+      `${root}/get_series/${enc}`,
+      `${root}/player_api?action=get_series&category_id=${enc}`,
+      `${root}/player_api.php?action=get_series&category_id=${enc}`,
+    ];
   }
 
-  if (!allSeries.length) {
+  function bulkSeriesUrls(): string[] {
+    return [
+      `${root}/series`,
+      `${root}/get_series`,
+      `${root}/player_api?action=get_series`,
+      `${root}/player_api.php?action=get_series`,
+    ];
+  }
+
+  let allSeries: LiveStream[] = [];
+
+  /** Nodecast often exposes all series on `GET …/series` right after `series_categories` — try bulk before per-category `get_series`. */
+  for (const url of bulkSeriesUrls()) {
+    try {
+      const payload = await fetchProxiedJsonWithInit<unknown>(url, { headers });
+      const chunk = mapChunk(payload);
+      if (chunk.length) {
+        allSeries = chunk;
+        break;
+      }
+    } catch {
+      /* variante suivante */
+    }
+  }
+
+  if (!allSeries.length && seriesCats.length > 0) {
     for (const cat of seriesCats) {
-      try {
-        const payload = await fetchProxiedJsonWithInit<unknown>(
-          `${base}/api/proxy/xtream/${sid}/get_series?category_id=${encodeURIComponent(cat.category_id)}`,
-          { headers }
-        );
-        const chunk = asArray(payload)
-          .map((item, idx) => mapNodecastSeriesToStream(item, idx, sourceId, cat.category_id))
-          .filter((s): s is LiveStream => s != null);
-        allSeries.push(...chunk);
-      } catch {
-        /* next category */
+      for (const url of seriesUrlsForCategory(cat.category_id)) {
+        try {
+          const payload = await fetchProxiedJsonWithInit<unknown>(url, { headers });
+          const chunk = mapChunk(payload, cat.category_id);
+          if (chunk.length) {
+            allSeries.push(...chunk);
+            break;
+          }
+        } catch {
+          /* variante suivante */
+        }
       }
     }
   }
@@ -862,7 +995,7 @@ async function loadSeriesCatalogFromFavoritesApi(
   for (const url of urls) {
     try {
       const payload = await fetchProxiedJsonWithInit<unknown>(url, { headers });
-      const arr = asArray(payload);
+      const arr = seriesListFromPayload(payload);
       const mapped = arr
         .map((item, idx) => mapNodecastSeriesToStream(unwrapFavoriteSeriesRow(item), idx, sourceId))
         .filter((s): s is LiveStream => s != null);

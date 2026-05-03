@@ -47,6 +47,7 @@ import {
   uploadPackageCoverFile,
   isPackageCoverDebugEnabled,
 } from "./supabaseAdminHierarchy";
+import { runCoverSquareCrop } from "./coverSquareCrop";
 import {
   FRANCE_SYNTH_PACKAGES,
   STREAM_CURATION_HIDDEN,
@@ -101,7 +102,11 @@ const elDapCancel = document.getElementById("dap-cancel") as HTMLButtonElement;
 const elDapSubmit = document.getElementById("dap-submit") as HTMLButtonElement;
 const elDapStatus = document.getElementById("dap-status") as HTMLParagraphElement;
 const elDapCover = document.getElementById("dap-cover") as HTMLInputElement;
-const elDapCoverUrl = document.getElementById("dap-cover-url") as HTMLInputElement;
+const elDapCoverPick = document.getElementById("dap-cover-pick") as HTMLButtonElement | null;
+const elDapCoverEmpty = document.getElementById("dap-cover-empty") as HTMLDivElement | null;
+const elDapCoverPreviewWrap = document.getElementById("dap-cover-preview-wrap") as HTMLDivElement | null;
+const elDapCoverPreview = document.getElementById("dap-cover-preview") as HTMLImageElement | null;
+const elDapDropzone = document.getElementById("dap-dropzone") as HTMLDivElement | null;
 const elDapEmptyCountriesHint = document.getElementById("dap-empty-countries-hint") as HTMLParagraphElement | null;
 const elDapNewCountryName = document.getElementById("dap-new-country-name") as HTMLInputElement;
 const elDapAddCountry = document.getElementById("dap-add-country") as HTMLButtonElement;
@@ -128,11 +133,19 @@ const elDialogPackageCover = document.getElementById("dialog-package-cover") as 
 const elPcePackageId = document.getElementById("pce-package-id") as HTMLInputElement | null;
 const elPcePackageName = document.getElementById("pce-package-name") as HTMLParagraphElement | null;
 const elPceCover = document.getElementById("pce-cover") as HTMLInputElement | null;
-const elPceCoverUrl = document.getElementById("pce-cover-url") as HTMLInputElement | null;
+const elPceCoverPick = document.getElementById("pce-cover-pick") as HTMLButtonElement | null;
+const elPceCoverEmpty = document.getElementById("pce-cover-empty") as HTMLDivElement | null;
+const elPceCoverPreviewWrap = document.getElementById("pce-cover-preview-wrap") as HTMLDivElement | null;
+const elPceCoverPreview = document.getElementById("pce-cover-preview") as HTMLImageElement | null;
+const elPceDropzone = document.getElementById("pce-dropzone") as HTMLDivElement | null;
 const elPceClear = document.getElementById("pce-clear") as HTMLButtonElement | null;
 const elPceCancel = document.getElementById("pce-cancel") as HTMLButtonElement | null;
 const elPceSubmit = document.getElementById("pce-submit") as HTMLButtonElement | null;
 const elPceStatus = document.getElementById("pce-status") as HTMLParagraphElement | null;
+
+/** `URL.createObjectURL` for cover previews — revoked when clearing or replacing. */
+let pceCoverPreviewObjectUrl: string | null = null;
+let dapCoverPreviewObjectUrl: string | null = null;
 
 const elDialogChannelAssign = document.getElementById("dialog-channel-assign") as HTMLDialogElement | null;
 const elChannelAssignSelect = document.getElementById("channel-assign-package") as HTMLSelectElement | null;
@@ -1631,7 +1644,7 @@ function openAddPackageDialog(): void {
   elDapStatus.classList.remove("error");
   elDapNewCountryName.value = "";
   elDapCover.value = "";
-  elDapCoverUrl.value = "";
+  syncCoverUploadVisual("dap");
   populateAddPackageDialogCountries();
   const merged = countryRowsForSelect();
   const hasCatalogueCountries = merged.length > 0;
@@ -1650,17 +1663,132 @@ function closeAddPackageDialog(): void {
   elDialogAddPkg.close();
 }
 
+function revokeCoverPreviewObjectUrl(side: "pce" | "dap"): void {
+  if (side === "pce") {
+    if (pceCoverPreviewObjectUrl) {
+      URL.revokeObjectURL(pceCoverPreviewObjectUrl);
+      pceCoverPreviewObjectUrl = null;
+    }
+  } else if (dapCoverPreviewObjectUrl) {
+    URL.revokeObjectURL(dapCoverPreviewObjectUrl);
+    dapCoverPreviewObjectUrl = null;
+  }
+}
+
+function syncCoverUploadVisual(side: "pce" | "dap"): void {
+  const input = side === "pce" ? elPceCover : elDapCover;
+  const empty = side === "pce" ? elPceCoverEmpty : elDapCoverEmpty;
+  const wrap = side === "pce" ? elPceCoverPreviewWrap : elDapCoverPreviewWrap;
+  const img = side === "pce" ? elPceCoverPreview : elDapCoverPreview;
+  const pick = side === "pce" ? elPceCoverPick : elDapCoverPick;
+  const zone = side === "pce" ? elPceDropzone : elDapDropzone;
+  revokeCoverPreviewObjectUrl(side);
+  const f = input?.files?.[0];
+  if (!f) {
+    if (img) {
+      img.removeAttribute("src");
+      img.alt = "";
+    }
+    empty?.classList.remove("hidden");
+    wrap?.classList.add("hidden");
+    if (pick) pick.textContent = "Choisir une image";
+    zone?.classList.remove("cover-upload__card--has-file");
+    return;
+  }
+  const url = URL.createObjectURL(f);
+  if (side === "pce") pceCoverPreviewObjectUrl = url;
+  else dapCoverPreviewObjectUrl = url;
+  if (img) {
+    img.src = url;
+    img.alt = `Aperçu : ${f.name}`;
+  }
+  empty?.classList.add("hidden");
+  wrap?.classList.remove("hidden");
+  if (pick) pick.textContent = "Changer l’image";
+  zone?.classList.add("cover-upload__card--has-file");
+}
+
+async function assignCoverAfterCrop(
+  input: HTMLInputElement | null,
+  sync: () => void,
+  file: File
+): Promise<void> {
+  if (!input) return;
+  const cropped = await runCoverSquareCrop(file);
+  input.value = "";
+  if (!cropped) {
+    sync();
+    return;
+  }
+  const dt = new DataTransfer();
+  dt.items.add(cropped);
+  input.files = dt.files;
+  sync();
+}
+
+function wirePackageCoverDropZone(
+  zone: HTMLElement | null,
+  input: HTMLInputElement | null,
+  sync: () => void,
+  afterCrop: (input: HTMLInputElement | null, sync: () => void, file: File) => Promise<void>
+): void {
+  if (!zone || !input) return;
+  zone.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    const rel = e.relatedTarget as Node | null;
+    if (rel && zone.contains(rel)) return;
+    zone.classList.add("cover-upload__card--drag");
+  });
+  zone.addEventListener("dragleave", (e) => {
+    const rel = e.relatedTarget as Node | null;
+    if (rel && zone.contains(rel)) return;
+    zone.classList.remove("cover-upload__card--drag");
+  });
+  zone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("cover-upload__card--drag");
+    const file = e.dataTransfer?.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    void afterCrop(input, sync, file);
+  });
+}
+
+(function wireCoverUploadControls(): void {
+  const syncPce = (): void => syncCoverUploadVisual("pce");
+  const syncDap = (): void => syncCoverUploadVisual("dap");
+  elPceCoverPick?.addEventListener("click", () => elPceCover?.click());
+  elDapCoverPick?.addEventListener("click", () => elDapCover?.click());
+  elPceCover?.addEventListener("change", () => {
+    const f = elPceCover?.files?.[0];
+    if (!f) {
+      syncPce();
+      return;
+    }
+    void assignCoverAfterCrop(elPceCover, syncPce, f);
+  });
+  elDapCover?.addEventListener("change", () => {
+    const f = elDapCover?.files?.[0];
+    if (!f) {
+      syncDap();
+      return;
+    }
+    void assignCoverAfterCrop(elDapCover, syncDap, f);
+  });
+  wirePackageCoverDropZone(elPceDropzone, elPceCover, syncPce, assignCoverAfterCrop);
+  wirePackageCoverDropZone(elDapDropzone, elDapCover, syncDap, assignCoverAfterCrop);
+})();
+
 function openPackageCoverEditDialog(pkg: AdminPackage): void {
-  if (!elDialogPackageCover || !elPcePackageId || !elPceCoverUrl || !elPceCover) return;
+  if (!elDialogPackageCover || !elPcePackageId || !elPceCover) return;
   const sb = getSupabaseClient();
   if (!isAdminSession() || !readAdminGridToolsEnabled() || !sb) return;
   elPcePackageId.value = pkg.id;
   if (elPcePackageName) elPcePackageName.textContent = pkg.name;
-  const stored = isLikelyUuid(pkg.id)
-    ? (pkg.cover_url?.trim() ?? "")
-    : (packageCoverOverrides.get(pkg.id)?.trim() ?? "");
-  elPceCoverUrl.value = stored && /^https?:\/\//i.test(stored) ? stored : "";
   elPceCover.value = "";
+  syncCoverUploadVisual("pce");
   elPceStatus && (elPceStatus.textContent = "");
   elPceStatus?.classList.remove("error");
   elDialogPackageCover.showModal();
@@ -1716,41 +1844,25 @@ elPceSubmit?.addEventListener("click", () => {
   void (async () => {
     const id = elPcePackageId?.value.trim();
     const sb = getSupabaseClient();
-    if (!id || !sb || !elPceCover || !elPceCoverUrl) return;
+    if (!id || !sb || !elPceCover) return;
     const file = elPceCover.files?.[0];
-    const urlPaste = elPceCoverUrl.value.trim();
     elPceStatus && (elPceStatus.textContent = "");
     elPceStatus?.classList.remove("error");
-    if (file && urlPaste) {
-      elPceStatus && (elPceStatus.textContent = "Utilisez soit un fichier, soit une URL — pas les deux.");
-      elPceStatus?.classList.add("error");
-      return;
-    }
-    if (urlPaste && !/^https?:\/\//i.test(urlPaste)) {
-      elPceStatus && (elPceStatus.textContent = "L’URL doit commencer par http:// ou https://");
-      elPceStatus?.classList.add("error");
-      return;
-    }
-    if (!file && !urlPaste) {
-      elPceStatus && (elPceStatus.textContent = "Choisissez un fichier ou une URL, ou utilisez « Retirer l’image ».");
+    if (!file) {
+      elPceStatus && (elPceStatus.textContent = "Choisissez une image ou utilisez « Retirer l’image ».");
       elPceStatus?.classList.add("error");
       return;
     }
 
     elPceSubmit.disabled = true;
     try {
-      let finalUrl: string;
-      if (file) {
-        const up = await uploadPackageCoverFile(sb, id, file);
-        if ("error" in up) {
-          elPceStatus && (elPceStatus.textContent = up.error);
-          elPceStatus?.classList.add("error");
-          return;
-        }
-        finalUrl = up.url;
-      } else {
-        finalUrl = urlPaste;
+      const up = await uploadPackageCoverFile(sb, id, file);
+      if ("error" in up) {
+        elPceStatus && (elPceStatus.textContent = up.error);
+        elPceStatus?.classList.add("error");
+        return;
       }
+      const finalUrl = up.url;
 
       if (isLikelyUuid(id)) {
         const { error } = await sb.from("admin_packages").update({ cover_url: finalUrl }).eq("id", id);
@@ -1937,17 +2049,6 @@ elDapSubmit.addEventListener("click", () => {
       return;
     }
     const file = elDapCover.files?.[0];
-    const urlPaste = elDapCoverUrl.value.trim();
-    if (file && urlPaste) {
-      elDapStatus.textContent = "Utilisez soit un fichier, soit une URL — pas les deux.";
-      elDapStatus.classList.add("error");
-      return;
-    }
-    if (urlPaste && !/^https?:\/\//i.test(urlPaste)) {
-      elDapStatus.textContent = "L’URL de l’image doit commencer par http:// ou https://";
-      elDapStatus.classList.add("error");
-      return;
-    }
 
     elDapSubmit.disabled = true;
     const resolvedCountryId = await resolveSupabaseCountryIdForNewPackage(countryId);
@@ -1962,7 +2063,7 @@ elDapSubmit.addEventListener("click", () => {
     const insertRow: { country_id: string; name: string; cover_url?: string | null } = {
       country_id: resolvedCountryId,
       name,
-      cover_url: file ? null : urlPaste || null,
+      cover_url: null,
     };
     const { data: inserted, error } = await sb
       .from("admin_packages")
@@ -2090,7 +2191,10 @@ async function openNodecastMediaShellAsync(tab: "movies" | "series"): Promise<vo
     } finally {
       setCatalogLoadingVisible(false);
     }
-  } else if (tab === "series" && !state.seriesCatalogLoaded) {
+  } else if (
+    tab === "series" &&
+    (!state.seriesCatalogLoaded || countStreamsInMap(state.seriesStreamsByCat) === 0)
+  ) {
     setCatalogLoadingVisible(true, "Chargement des séries…");
     try {
       const s = await fetchNodecastSeriesCatalog(state.base, sid, state.nodecastAuthHeaders);

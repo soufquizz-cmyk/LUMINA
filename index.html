@@ -311,24 +311,33 @@
       </div>
     </dialog>
 
-    <dialog id="dialog-package-cover" class="admin-channel-assign-dialog">
-      <div class="admin-add-package-dialog__panel">
+    <dialog id="dialog-package-cover" class="admin-channel-assign-dialog admin-cover-dialog">
+      <div class="admin-add-package-dialog__panel admin-cover-dialog__panel">
         <h2 class="admin-add-package-dialog__title">Image du bouquet</h2>
         <p id="pce-package-name" class="admin-add-package-dialog__hint"></p>
         <input type="hidden" id="pce-package-id" value="" />
-        <div class="field">
-          <label for="pce-cover">Fichier image (optionnel)</label>
-          <input id="pce-cover" type="file" accept="image/jpeg,image/png,image/webp,image/gif" />
-        </div>
-        <div class="field">
-          <label for="pce-cover-url">Ou URL (https)</label>
+        <div class="cover-upload">
           <input
-            id="pce-cover-url"
-            type="url"
-            class="admin-add-package-dialog__input"
-            placeholder="https://…"
-            autocomplete="off"
+            id="pce-cover"
+            type="file"
+            class="cover-upload__input"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            tabindex="-1"
+            aria-label="Fichier image"
           />
+          <div id="pce-dropzone" class="cover-upload__card">
+            <div class="cover-upload__glow" aria-hidden="true"></div>
+            <div id="pce-cover-empty" class="cover-upload__empty">
+              <span class="cover-upload__icon" aria-hidden="true"></span>
+              <p class="cover-upload__lead">Glissez-déposez une image ou choisissez un fichier</p>
+              <p class="cover-upload__limits">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
+            </div>
+            <div id="pce-cover-preview-wrap" class="cover-upload__preview-wrap hidden">
+              <img id="pce-cover-preview" class="cover-upload__preview" alt="" decoding="async" />
+              <p class="cover-upload__limits cover-upload__limits--below-preview">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
+            </div>
+            <button type="button" id="pce-cover-pick" class="cover-upload__btn">Choisir une image</button>
+          </div>
         </div>
         <p id="pce-status" class="status" aria-live="polite"></p>
         <div class="actions">
@@ -357,8 +366,8 @@
       </div>
     </dialog>
 
-    <dialog id="dialog-admin-add-package" class="admin-add-package-dialog">
-      <div class="admin-add-package-dialog__panel">
+    <dialog id="dialog-admin-add-package" class="admin-add-package-dialog admin-cover-dialog">
+      <div class="admin-add-package-dialog__panel admin-cover-dialog__panel">
         <h2 class="admin-add-package-dialog__title">Nouveau package (Supabase)</h2>
         <p class="admin-add-package-dialog__hint">
           Le bouquet est enregistré dans la base. La liste des pays est la <strong>même</strong> que dans le menu
@@ -390,27 +399,66 @@
           <input id="dap-name" type="text" placeholder="Ex. Sports HD" autocomplete="off" />
         </div>
         <div class="field">
-          <label for="dap-cover">Image du bouquet (optionnel)</label>
-          <input id="dap-cover" type="file" accept="image/jpeg,image/png,image/webp,image/gif" />
-          <p class="admin-add-package-dialog__microhint" style="margin-top: 0.35rem; margin-bottom: 0">
-            Fichier max 2 Mo. Créez un bucket Storage public <code>package-covers</code> (même nom exact) dans
-            Supabase pour l’envoi ; sinon utilisez une URL ci-dessous.
+          <span class="cover-upload-field-label">Image du bouquet (optionnel)</span>
+          <div class="cover-upload">
+            <input
+              id="dap-cover"
+              type="file"
+              class="cover-upload__input"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              tabindex="-1"
+              aria-label="Image du bouquet"
+            />
+            <div id="dap-dropzone" class="cover-upload__card cover-upload__card--compact">
+              <div class="cover-upload__glow" aria-hidden="true"></div>
+              <div id="dap-cover-empty" class="cover-upload__empty">
+                <span class="cover-upload__icon" aria-hidden="true"></span>
+                <p class="cover-upload__lead">Glissez-déposez ou parcourez vos fichiers</p>
+                <p class="cover-upload__limits">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
+              </div>
+              <div id="dap-cover-preview-wrap" class="cover-upload__preview-wrap hidden">
+                <img id="dap-cover-preview" class="cover-upload__preview" alt="" decoding="async" />
+                <p class="cover-upload__limits cover-upload__limits--below-preview">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
+              </div>
+              <button type="button" id="dap-cover-pick" class="cover-upload__btn">Choisir une image</button>
+            </div>
+          </div>
+          <p class="admin-add-package-dialog__microhint" style="margin-top: 0.5rem; margin-bottom: 0">
+            Stockage : bucket public <code>package-covers</code> sur Supabase, ou Cloudflare&nbsp;/&nbsp;R2 si configuré
+            dans l’environnement.
           </p>
-        </div>
-        <div class="field">
-          <label for="dap-cover-url">Ou URL d’image (https)</label>
-          <input
-            id="dap-cover-url"
-            type="url"
-            class="admin-add-package-dialog__input"
-            placeholder="https://…"
-            autocomplete="off"
-          />
         </div>
         <p id="dap-status" class="status" aria-live="polite"></p>
         <div class="actions">
           <button type="button" id="dap-cancel" class="countries-admin-cancel">Annuler</button>
           <button type="button" id="dap-submit" class="primary">Ajouter</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="dialog-cover-square-crop" class="admin-channel-assign-dialog admin-cover-crop-dialog">
+      <div class="admin-add-package-dialog__panel admin-cover-dialog__panel admin-cover-crop-dialog__panel">
+        <h2 class="admin-add-package-dialog__title">Recadrer en carré</h2>
+        <p class="admin-add-package-dialog__hint">
+          Glissez pour repositionner l’image. Molette ou curseur pour zoomer. La zone visible est un carré.
+        </p>
+        <div
+          id="crop-sq-viewport"
+          class="cover-crop-viewport"
+          tabindex="0"
+          role="application"
+          aria-label="Aperçu du recadrage carré"
+        >
+          <canvas id="crop-sq-canvas" width="300" height="300"></canvas>
+        </div>
+        <div class="cover-crop-zoom">
+          <label for="crop-sq-zoom">Zoom</label>
+          <input type="range" id="crop-sq-zoom" min="100" max="300" value="100" step="2" />
+        </div>
+        <p id="crop-sq-err" class="cover-crop-err" role="alert"></p>
+        <div class="actions">
+          <button type="button" id="crop-sq-cancel" class="countries-admin-cancel">Annuler</button>
+          <button type="button" id="crop-sq-apply" class="primary">Valider le recadrage</button>
         </div>
       </div>
     </dialog>

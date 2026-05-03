@@ -1275,6 +1275,29 @@ function appendAddPackageCard(): void {
   elPackagesView.appendChild(add);
 }
 
+/** Nearly square grid art fills the card; horizontal / vertical images stay fully visible (`contain`). */
+const PACKAGE_CARD_SQUARE_RATIO_EPS = 0.1;
+
+function isNearlySquarePackageArt(nw: number, nh: number): boolean {
+  if (nw < 2 || nh < 2) return false;
+  const r = nw / nh;
+  return r >= 1 - PACKAGE_CARD_SQUARE_RATIO_EPS && r <= 1 + PACKAGE_CARD_SQUARE_RATIO_EPS;
+}
+
+function wirePackageCardArtFit(img: HTMLImageElement): void {
+  img.classList.add("vel-package-card__art");
+  const apply = (): void => {
+    img.classList.remove("vel-package-card__art--cover", "vel-package-card__art--contain");
+    img.classList.add(
+      isNearlySquarePackageArt(img.naturalWidth, img.naturalHeight)
+        ? "vel-package-card__art--cover"
+        : "vel-package-card__art--contain"
+    );
+  };
+  img.addEventListener("load", apply);
+  if (img.complete) queueMicrotask(apply);
+}
+
 function renderPackagesGrid(): void {
   elPackagesView.innerHTML = "";
   const st = state;
@@ -1363,6 +1386,7 @@ function renderPackagesGrid(): void {
         img.alt = "";
         img.setAttribute("role", "presentation");
         img.src = packageCoverImageSrc(cover);
+        wirePackageCardArtFit(img);
         img.addEventListener("error", () => {
           if (isPackageCoverDebugEnabled()) {
             console.warn("[package-cover] grid img error (db package)", {
@@ -1377,6 +1401,7 @@ function renderPackagesGrid(): void {
             img2.alt = "";
             img2.setAttribute("role", "presentation");
             img2.src = proxiedUrl(channelFirstIcon);
+            wirePackageCardArtFit(img2);
             img2.addEventListener("error", () => {
               img2.remove();
               const em = document.createElement("span");
@@ -1400,6 +1425,7 @@ function renderPackagesGrid(): void {
         img.alt = "";
         img.setAttribute("role", "presentation");
         img.src = proxiedUrl(channelFirstIcon);
+        wirePackageCardArtFit(img);
         img.addEventListener("error", () => {
           img.remove();
           const em = document.createElement("span");
@@ -1474,6 +1500,7 @@ function renderPackagesGrid(): void {
       img.alt = "";
       img.setAttribute("role", "presentation");
       img.src = proxiedUrl(href);
+      wirePackageCardArtFit(img);
       img.addEventListener("error", () => {
         img.remove();
         appendEmoji(onFailEmoji);
@@ -1486,6 +1513,7 @@ function renderPackagesGrid(): void {
       img.alt = "";
       img.setAttribute("role", "presentation");
       img.src = packageCoverImageSrc(httpsOverride);
+      wirePackageCardArtFit(img);
       img.addEventListener("error", () => {
         if (isPackageCoverDebugEnabled()) {
           console.warn("[package-cover] grid img error (catalog override)", {

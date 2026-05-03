@@ -575,7 +575,7 @@ function showAdminChannelCurateTools(): boolean {
  * display name so curations (masquer / déplacer) can be stored.
  */
 async function ensureSupabaseCountryForSelection(): Promise<string | null> {
-  const existing = matchedDbCountryIdForSelection();
+  const existing = resolvedDbCountryIdForAdminPackages();
   if (existing) return existing;
   const sb = getSupabaseClient();
   if (!sb) return null;
@@ -600,7 +600,7 @@ async function persistStreamCuration(streamId: number, targetPackageId: string):
     flashCurateStatus("Supabase non configuré.", true);
     return false;
   }
-  let cid = matchedDbCountryIdForSelection();
+  let cid = resolvedDbCountryIdForAdminPackages();
   if (!cid) {
     cid = await ensureSupabaseCountryForSelection();
   }
@@ -646,7 +646,7 @@ async function persistStreamCuration(streamId: number, targetPackageId: string):
 function populateChannelAssignPackageSelect(): void {
   if (!elChannelAssignSelect) return;
   elChannelAssignSelect.innerHTML = "";
-  const pkgs = mergedPackagesForGrid();
+  const pkgs = augmentChannelAssignPackagesFromDb(mergedPackagesForGrid());
   for (const p of pkgs) {
     const o = document.createElement("option");
     o.value = p.id;
@@ -1110,7 +1110,7 @@ function unionStreamsForCurrentCountry(): LiveStream[] {
 }
 
 function curationMapForSelection(): Map<number, string> | null {
-  const cid = matchedDbCountryIdForSelection();
+  const cid = resolvedDbCountryIdForAdminPackages();
   if (!cid) return null;
   return streamCurationByCountry.get(cid) ?? new Map();
 }
@@ -1182,12 +1182,45 @@ function matchedDbCountryIdForSelection(): string | null {
   return matchDbCountryIdByDisplayName(c.name, dbAdminCountries);
 }
 
+/**
+ * `admin_countries.id` pour packages Supabase + curations : reprend `matchedDbCountryIdForSelection`,
+ * puis le libellé pays du header si le catalogue et Supabase n’alignent pas les ids.
+ */
+function resolvedDbCountryIdForAdminPackages(): string | null {
+  const m = matchedDbCountryIdForSelection();
+  if (m) return m;
+  const label = currentCountryDisplayLabel();
+  if (!label) return null;
+  return matchDbCountryIdByDisplayName(label, dbAdminCountries);
+}
+
+function augmentChannelAssignPackagesFromDb(base: AdminPackage[]): AdminPackage[] {
+  const byId = new Map(base.map((p) => [p.id, p]));
+  const sid = resolvedDbCountryIdForAdminPackages();
+  const label = currentCountryDisplayLabel();
+  const labelKey = label ? normalizeCountryKey(label) : "";
+  for (const p of dbAdminPackages) {
+    if (byId.has(p.id)) continue;
+    if (sid && p.country_id === sid) {
+      byId.set(p.id, p);
+      continue;
+    }
+    if (labelKey) {
+      const dc = dbAdminCountries.find((c) => c.id === p.country_id);
+      if (dc && normalizeCountryKey(dc.name) === labelKey) {
+        byId.set(p.id, p);
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, "fr"));
+}
+
 function mergedPackagesForGrid(): AdminPackage[] {
   const provider = packagesForSelectedCountry();
   if (uiTab === "movies" || uiTab === "series") {
     return [...provider].sort((a, b) => a.name.localeCompare(b.name, "fr"));
   }
-  const sid = matchedDbCountryIdForSelection();
+  const sid = resolvedDbCountryIdForAdminPackages();
   const fromDb = sid ? dbAdminPackages.filter((p) => p.country_id === sid) : [];
   const base = [...fromDb, ...provider];
   if (isSelectedCountryFrance() && selectedAdminCountryId) {
@@ -1633,7 +1666,7 @@ function preselectDapCountryFromHeader(): void {
     const hit = countryRowsForSelect().find((c) => normalizeCountryKey(c.name) === nk);
     if (hit && tryVal(hit.id)) return;
   }
-  if (tryVal(matchedDbCountryIdForSelection())) return;
+  if (tryVal(resolvedDbCountryIdForAdminPackages())) return;
   elDapSbCountry.selectedIndex = 0;
 }
 

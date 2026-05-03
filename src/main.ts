@@ -355,13 +355,23 @@ function destroyPlayer(): void {
   showPlayerChrome(false);
 }
 
-function playUrl(url: string, label: string): void {
+function playUrl(
+  url: string,
+  label: string,
+  upstreamAuth?: Record<string, string>
+): void {
   destroyPlayer();
   const proxied = proxiedUrl(url);
   elNowPlaying.innerHTML = nowPlayingLiveMarkup(label);
   showPlayerChrome(true);
 
-  if (elVideo.canPlayType("application/vnd.apple.mpegurl")) {
+  const hasUpstreamAuth = Boolean(
+    upstreamAuth &&
+      Object.values(upstreamAuth).some((v) => typeof v === "string" && v.trim())
+  );
+
+  // Native <video> cannot send Authorization; Nodecast transcode/HLS needs Bearer on every segment.
+  if (elVideo.canPlayType("application/vnd.apple.mpegurl") && !hasUpstreamAuth) {
     elVideo.src = proxied;
     void elVideo.play().catch(() => {});
     return;
@@ -371,6 +381,17 @@ function playUrl(url: string, label: string): void {
     hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
+      xhrSetup(xhr) {
+        if (!upstreamAuth) return;
+        for (const [k, v] of Object.entries(upstreamAuth)) {
+          if (typeof v !== "string" || !v.trim()) continue;
+          try {
+            xhr.setRequestHeader(k, v);
+          } catch {
+            /* ignore invalid header names */
+          }
+        }
+      },
     });
     hls.loadSource(proxied);
     hls.attachMedia(elVideo);
@@ -2115,7 +2136,7 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
       return;
     }
     s.direct_source = resolved;
-    playUrl(resolved, displayChannelName(s.name));
+    playUrl(resolved, displayChannelName(s.name), state.nodecastAuthHeaders);
     return;
   }
   const m3u8 = buildLiveStreamUrl(

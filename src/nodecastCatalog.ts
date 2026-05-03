@@ -1,5 +1,7 @@
 /** Shared Nodecast catalog loading + stream URL resolution. */
 
+import { proxiedFullUrl } from "./proxyParamTransport";
+
 export type LiveCategory = {
   category_id: string;
   category_name: string;
@@ -38,10 +40,7 @@ export function normalizeServerInput(raw: string): string {
 }
 
 export function proxiedUrl(target: string, fromPlaylist?: string): string {
-  const p = new URLSearchParams();
-  p.set("target", target);
-  p.set("from", fromPlaylist ?? target);
-  return `${PROXY_PREFIX}?${p.toString()}`;
+  return proxiedFullUrl(PROXY_PREFIX, target, fromPlaylist);
 }
 
 /**
@@ -128,11 +127,48 @@ function asArray(payload: unknown): unknown[] {
   return [];
 }
 
+function canonicalHttpUrlFromMaybeEncoded(raw: string): string {
+  let s = raw.trim();
+  for (let i = 0; i < 8; i++) {
+    if (!/%[0-9A-Fa-f]{2}/i.test(s)) break;
+    try {
+      const d = decodeURIComponent(s);
+      if (d === s) break;
+      s = d;
+    } catch {
+      break;
+    }
+  }
+  return s;
+}
+
+/** Peel Nodecast `/api/proxy/stream?url=` wrappers (possibly nested / double-encoded) to the real CDN URL. */
+function innermostHttpStreamTarget(urlOrProxy: string): string {
+  let s = urlOrProxy.trim();
+  for (let depth = 0; depth < 6; depth++) {
+    try {
+      const u = new URL(s);
+      if (!/\/api\/proxy\/stream$/i.test(u.pathname)) {
+        return canonicalHttpUrlFromMaybeEncoded(s);
+      }
+      const inner = u.searchParams.get("url");
+      if (!inner?.trim()) {
+        return canonicalHttpUrlFromMaybeEncoded(s);
+      }
+      s = canonicalHttpUrlFromMaybeEncoded(inner.trim());
+    } catch {
+      return canonicalHttpUrlFromMaybeEncoded(s);
+    }
+  }
+  return canonicalHttpUrlFromMaybeEncoded(s);
+}
+
 function looksLikeMediaUrl(v: string): boolean {
+  const s = canonicalHttpUrlFromMaybeEncoded(v);
   return (
-    /^https?:\/\//i.test(v) &&
+    /^https?:\/\//i.test(s) &&
     /(\.m3u8|\.mpd|\.ts|\.mp4|\.mkv|\.mov|\/live\/|\/hls\/|\/stream\/|\/movie\/|\/vod\/)/i.test(
-      v
+      s
     )
   );
 }
@@ -140,7 +176,7 @@ function looksLikeMediaUrl(v: string): boolean {
 function extractStreamUrlDeep(payload: unknown): string | null {
   if (typeof payload === "string") {
     const trimmed = payload.trim();
-    return looksLikeMediaUrl(trimmed) ? trimmed : null;
+    return looksLikeMediaUrl(trimmed) ? canonicalHttpUrlFromMaybeEncoded(trimmed) : null;
   }
   if (!payload || typeof payload !== "object") return null;
   if (Array.isArray(payload)) {
@@ -165,7 +201,7 @@ function extractStreamUrlDeep(payload: unknown): string | null {
     const v = obj[k];
     if (typeof v === "string") {
       const trimmed = v.trim();
-      if (looksLikeMediaUrl(trimmed)) return trimmed;
+      if (looksLikeMediaUrl(trimmed)) return canonicalHttpUrlFromMaybeEncoded(trimmed);
     }
   }
   for (const v of Object.values(obj)) {
@@ -201,6 +237,41 @@ function isLikelyM3u8Body(text: string): boolean {
   return text.trimStart().startsWith("#EXTM3U");
 }
 
+const NODECAST_SETTINGS_CACHE_MS = 5 * 60 * 1000;
+let nodecastProbeUaCache: { base: string; ua: string; exp: number } | null = null;
+
+async function nodecastProbeUrl(
+  nodecastBase: string,
+  upstreamUrl: string,
+  headers?: Record<string, string>
+): Promise<string> {
+  const b = nodecastBase.replace(/\/+$/, "");
+  let ua = "vlc";
+  const now = Date.now();
+  if (
+    nodecastProbeUaCache &&
+    nodecastProbeUaCache.base === b &&
+    nodecastProbeUaCache.exp > now
+  ) {
+    ua = nodecastProbeUaCache.ua;
+  } else {
+    try {
+      const s = await fetchProxiedJsonWithInit<Record<string, unknown>>(
+        `${b}/api/settings`,
+        { headers }
+      );
+      const preset =
+        typeof s.userAgentPreset === "string" ? s.userAgentPreset.trim().toLowerCase() : "";
+      if (preset === "vlc" || preset === "chrome" || preset === "firefox") ua = preset;
+      else if (preset) ua = preset.replace(/\s+/g, "_").slice(0, 48);
+      nodecastProbeUaCache = { base: b, ua, exp: now + NODECAST_SETTINGS_CACHE_MS };
+    } catch {
+      nodecastProbeUaCache = { base: b, ua: "vlc", exp: now + 60_000 };
+    }
+  }
+  return `${b}/api/probe?url=${encodeURIComponent(upstreamUrl)}&ua=${encodeURIComponent(ua)}`;
+}
+
 function playlistUrlFromNodecastTranscodeResponse(
   payload: unknown,
   nodecastBase: string
@@ -220,9 +291,10 @@ function playlistUrlFromNodecastTranscodeResponse(
 
 async function createNodecastTranscodeUrl(
   nodecastBase: string,
-  upstreamUrl: string,
+  upstreamUrlRaw: string,
   headers?: Record<string, string>
 ): Promise<string | null> {
+  const upstreamUrl = innermostHttpStreamTarget(upstreamUrlRaw);
   const now = Date.now();
   const cached = transcodePlaylistCache.get(upstreamUrl);
   if (cached && cached.expires > now) {
@@ -236,10 +308,8 @@ async function createNodecastTranscodeUrl(
 
   inflight = (async (): Promise<string | null> => {
     try {
-      await fetchProxiedJsonWithInit<unknown>(
-        `${nodecastBase}/api/probe?url=${encodeURIComponent(upstreamUrl)}`,
-        { headers }
-      );
+      const probe = await nodecastProbeUrl(nodecastBase, upstreamUrl, headers);
+      await fetchProxiedJsonWithInit<unknown>(probe, { headers });
     } catch {
       // optional warm-up
     }
@@ -299,15 +369,26 @@ async function createNodecastTranscodeUrl(
 
 function buildNodecastProxyStreamPlaylistUrl(nodecastBase: string, upstreamUrl: string): string {
   const b = nodecastBase.replace(/\/+$/, "");
-  return `${b}/api/proxy/stream?url=${encodeURIComponent(upstreamUrl)}`;
+  const inner = innermostHttpStreamTarget(upstreamUrl);
+  return `${b}/api/proxy/stream?url=${encodeURIComponent(inner)}`;
 }
 
 async function resolveCandidateToPlayableUrl(
   candidate: string,
   headers?: Record<string, string>
 ): Promise<string | null> {
+  let c = candidate.trim();
   try {
-    const r = await fetch(proxiedUrl(candidate), { method: "GET", headers });
+    const u = new URL(c);
+    if (/\/api\/proxy\/stream$/i.test(u.pathname)) {
+      const origin = `${u.protocol}//${u.host}`;
+      c = buildNodecastProxyStreamPlaylistUrl(origin, innermostHttpStreamTarget(c));
+    }
+  } catch {
+    /* keep c */
+  }
+  try {
+    const r = await fetch(proxiedUrl(c), { method: "GET", headers });
     if (!r.ok) return null;
     const ct = (r.headers.get("content-type") || "").toLowerCase();
 
@@ -316,27 +397,27 @@ async function resolveCandidateToPlayableUrl(
       !ct.includes("mpegurl") &&
       !ct.includes("x-mpegurl")
     ) {
-      return candidate;
+      return c;
     }
     if (ct.includes("application/octet-stream")) {
-      if (/\.m3u8(\?|$)/i.test(candidate)) {
+      if (/\.m3u8(\?|$)/i.test(c)) {
         /* read body below — may still be a playlist */
       } else if (
         /(\.(mp4|mkv|avi|mov|webm)(\?|$))|\/movie\/[^/?]+(\?|$)|\/vod\/[^/?]+(\?|$)/i.test(
-          candidate
+          c
         )
       ) {
-        return candidate;
+        return c;
       }
     }
 
     const body = await r.text();
 
     if (ct.includes("application/vnd.apple.mpegurl") || ct.includes("application/x-mpegurl")) {
-      return isLikelyM3u8Body(body) ? candidate : null;
+      return isLikelyM3u8Body(body) ? c : null;
     }
     if (isLikelyM3u8Body(body)) {
-      return candidate;
+      return c;
     }
 
     if (ct.includes("application/json") || body.trimStart().startsWith("{") || body.trimStart().startsWith("[")) {
@@ -344,15 +425,24 @@ async function resolveCandidateToPlayableUrl(
         const parsed = JSON.parse(body) as unknown;
         const extracted = extractStreamUrlDeep(parsed);
         if (!extracted) return null;
+        const extractedAbs = canonicalHttpUrlFromMaybeEncoded(extracted);
         try {
-          const candidateUrl = new URL(candidate);
-          const extractedUrl = new URL(extracted, candidateUrl);
+          const candidateUrl = new URL(c);
+          const extractedUrl = /^https?:\/\//i.test(extractedAbs)
+            ? new URL(extractedAbs)
+            : new URL(extractedAbs, candidateUrl);
           if (extractedUrl.origin !== candidateUrl.origin) {
             const nodecastOrigin = `${candidateUrl.protocol}//${candidateUrl.host}`;
             const viaProxy = buildNodecastProxyStreamPlaylistUrl(nodecastOrigin, extractedUrl.href);
             const playable = await resolveCandidateToPlayableUrl(viaProxy, headers);
             if (playable) return playable;
             return await createNodecastTranscodeUrl(nodecastOrigin, extractedUrl.href, headers);
+          }
+          if (/\/api\/proxy\/stream$/i.test(extractedUrl.pathname)) {
+            return buildNodecastProxyStreamPlaylistUrl(
+              `${extractedUrl.protocol}//${extractedUrl.host}`,
+              innermostHttpStreamTarget(extractedUrl.href)
+            );
           }
           return extractedUrl.href;
         } catch {
@@ -814,6 +904,13 @@ function containerExtFromVodInfoPayload(payload: unknown): string | null {
   return ext || null;
 }
 
+/** Nodecast / Xtream proxy often returns `{ "error": "Unknown action" }` with HTTP 200. */
+function xtreamProxyJsonLooksRejected(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const err = (payload as Record<string, unknown>).error;
+  return typeof err === "string" && Boolean(err.trim());
+}
+
 function extractVodPlaybackHrefFromInfo(payload: unknown): string | null {
   const deep = extractStreamUrlDeep(payload);
   if (deep) return deep;
@@ -839,7 +936,7 @@ async function resolvePlaybackHrefViaNodecast(
   href: string,
   headers?: Record<string, string>
 ): Promise<string | null> {
-  const trimmed = href.trim();
+  const trimmed = innermostHttpStreamTarget(href.trim());
   if (!/^https?:\/\//i.test(trimmed)) return null;
   const b = nodecastBase.replace(/\/+$/, "");
   let nodeOrigin: string;
@@ -871,13 +968,13 @@ async function tryResolveVodFromGetInfo(
   headers?: Record<string, string>
 ): Promise<string | null> {
   const infoUrls = [
-    `${b}/api/proxy/xtream/${sid}/get_vod_info?vod_id=${streamId}`,
-    `${b}/api/proxy/xtream/${sid}/get_vod_info?stream_id=${streamId}`,
-    `${b}/api/proxy/xtream/${sid}/get_vod_info?id=${streamId}`,
+    `${b}/api/proxy/xtream/${sid}/player_api?action=get_vod_info&vod_id=${streamId}`,
+    `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_vod_info&vod_id=${streamId}`,
   ];
   for (const u of infoUrls) {
     try {
       const payload = await fetchProxiedJsonWithInit<unknown>(u, { headers });
+      if (xtreamProxyJsonLooksRejected(payload)) continue;
       const href = extractVodPlaybackHrefFromInfo(payload);
       if (href) {
         const r = await resolvePlaybackHrefViaNodecast(b, href, headers);
@@ -972,9 +1069,6 @@ export async function resolveNodecastVodStreamUrl(
     if (fromDirect) return fromDirect;
   }
 
-  const fromInfo = await tryResolveVodFromGetInfo(b, sid, streamId, s, authHeaders);
-  if (fromInfo) return fromInfo;
-
   const candidates: string[] = [];
   const ext = (s.container_extension ?? "").trim().toLowerCase();
   if (ext && /^[a-z0-9]+$/.test(ext)) {
@@ -986,16 +1080,16 @@ export async function resolveNodecastVodStreamUrl(
       `${b}/api/proxy/xtream/${sid}/movie/${streamId}.${ext}?container=m3u8`
     );
   }
-  const streamContainers = ["m3u8", "mkv", "ts", "mp4"] as const;
+  const streamContainers = ["m3u8", "mp4", "mkv", "ts"] as const;
   for (const c of streamContainers) {
     candidates.push(
-      `${b}/api/proxy/xtream/${sid}/stream/${streamId}/vod?container=${c}`,
-      `${b}/api/proxy/xtream/${sid}/stream/${streamId}/movie?container=${c}`
+      `${b}/api/proxy/xtream/${sid}/stream/${streamId}/movie?container=${c}`,
+      `${b}/api/proxy/xtream/${sid}/stream/${streamId}/vod?container=${c}`
     );
   }
   candidates.push(
-    `${b}/api/proxy/xtream/${sid}/stream/${streamId}/vod`,
     `${b}/api/proxy/xtream/${sid}/stream/${streamId}/movie`,
+    `${b}/api/proxy/xtream/${sid}/stream/${streamId}/vod`,
     `${b}/api/proxy/xtream/${sid}/vod/${streamId}.m3u8`,
     `${b}/api/proxy/xtream/${sid}/vod/${streamId}.ts`,
     `${b}/api/proxy/xtream/${sid}/movie/${streamId}`,
@@ -1008,7 +1102,7 @@ export async function resolveNodecastVodStreamUrl(
     const playable = await resolveCandidateToPlayableUrl(candidate, authHeaders);
     if (playable) return playable;
   }
-  return null;
+  return tryResolveVodFromGetInfo(b, sid, streamId, s, authHeaders);
 }
 
 function extractFirstEpisodeStreamId(payload: unknown): number | null {
@@ -1039,15 +1133,17 @@ export async function resolveNodecastSeriesPlayableUrl(
   sourceId: string,
   authHeaders?: Record<string, string>
 ): Promise<string | null> {
+  const b = base.replace(/\/+$/, "");
   const sid = encodeURIComponent(sourceId);
   const seriesQ = encodeURIComponent(String(seriesId));
   const infoUrls = [
-    `${base}/api/proxy/xtream/${sid}/get_series_info?series_id=${seriesQ}`,
-    `${base}/api/proxy/xtream/${sid}/series_info?series_id=${seriesQ}`,
+    `${b}/api/proxy/xtream/${sid}/player_api?action=get_series_info&series_id=${seriesQ}`,
+    `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_series_info&series_id=${seriesQ}`,
   ];
   for (const u of infoUrls) {
     try {
       const payload = await fetchProxiedJsonWithInit<unknown>(u, { headers: authHeaders });
+      if (xtreamProxyJsonLooksRejected(payload)) continue;
       const epId = extractFirstEpisodeStreamId(payload);
       if (epId == null) continue;
       const epStream: LiveStream = {

@@ -8,6 +8,7 @@
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { fromBase64UrlUtf8, proxiedFullUrl } from "../src/proxyParamTransport";
 
 const PROXY_PREFIX = (process.env.VITE_PROXY_PREFIX ?? "/proxy").replace(/\/$/, "");
 
@@ -127,6 +128,12 @@ function buildUpstreamHeaders(
           referer = refererForTarget(targetUrl);
         } else if (/\/live\/.+\.m3u8$/i.test(targetPath)) {
           referer = stripDefaultPortHref(`${target.origin}/`);
+        } else if (
+          /\/get_vod_info$/i.test(targetPath) ||
+          /\/get_series_info$/i.test(targetPath) ||
+          /\/player_api(\.php)?$/i.test(targetPath)
+        ) {
+          referer = stripDefaultPortHref(`${target.origin}/`);
         } else {
           referer = stripDefaultPortHref(from.href);
         }
@@ -143,8 +150,14 @@ function buildUpstreamHeaders(
     const lastM3u8 = dirKey ? lastM3u8ByHlsDir.get(dirKey) : undefined;
     if (lastM3u8) referer = stripDefaultPortHref(lastM3u8);
   }
+  const isXtreamInfoEndpoint =
+    /\/get_vod_info$/i.test(targetPath) ||
+    /\/get_series_info$/i.test(targetPath) ||
+    /\/player_api(\.php)?$/i.test(targetPath);
   const h: Record<string, string> = {
-    Accept: acceptStr,
+    Accept: isXtreamInfoEndpoint
+      ? "application/json, text/plain;q=0.9, */*;q=0.8"
+      : acceptStr,
     "Accept-Language": "en-US,en;q=0.9",
     Referer: referer,
     "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
@@ -166,12 +179,7 @@ function buildUpstreamHeaders(
 
 function rewriteM3u8(body: string, playlistUrl: string): string {
   const base = new URL(playlistUrl);
-  const proxy = (absolute: string) => {
-    const p = new URLSearchParams();
-    p.set("target", absolute);
-    p.set("from", playlistUrl);
-    return `${PROXY_PREFIX}?${p.toString()}`;
-  };
+  const proxy = (absolute: string) => proxiedFullUrl(PROXY_PREFIX, absolute, playlistUrl);
   return body
     .split("\n")
     .map((line) => {
@@ -268,8 +276,27 @@ function isAllowedTarget(target: string): boolean {
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   const host = req.headers.host ?? "localhost";
   const url = new URL(req.url ?? "/api/proxy", `http://${host}`);
-  const target = url.searchParams.get("target");
-  const from = url.searchParams.get("from");
+  const qb64 = url.searchParams.get("targetB64");
+  const fb64 = url.searchParams.get("fromB64");
+  let target = url.searchParams.get("target");
+  let from = url.searchParams.get("from");
+  if (qb64) {
+    try {
+      target = fromBase64UrlUtf8(qb64);
+    } catch {
+      res.status(400).send("Bad targetB64");
+      return;
+    }
+  }
+  if (fb64) {
+    try {
+      from = fromBase64UrlUtf8(fb64);
+    } catch {
+      res.status(400).send("Bad fromB64");
+      return;
+    }
+  }
+  if (!from && target) from = target;
 
   if (!target || !isHttpUrl(target)) {
     res.status(400).send("Bad target");

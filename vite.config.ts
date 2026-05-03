@@ -6,6 +6,7 @@ import {
   handleR2PackageCoverRoute,
   isR2PackageCoverRoute,
 } from "./api/r2PackageCoverShared";
+import { fromBase64UrlUtf8, proxiedFullUrl } from "./src/proxyParamTransport";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,12 +75,7 @@ function logProxy(
 
 function rewriteM3u8(body: string, playlistUrl: string): string {
   const base = new URL(playlistUrl);
-  const proxy = (absolute: string) => {
-    const p = new URLSearchParams();
-    p.set("target", absolute);
-    p.set("from", playlistUrl);
-    return `${PROXY_PREFIX}?${p.toString()}`;
-  };
+  const proxy = (absolute: string) => proxiedFullUrl(PROXY_PREFIX, absolute, playlistUrl);
 
   return body
     .split("\n")
@@ -215,6 +211,13 @@ function buildUpstreamHeaders(
         } else if (/\/live\/.+\.m3u8$/i.test(targetPath)) {
           // Some IPTV providers reject full /live/user/pass/... referers.
           referer = stripDefaultPortHref(`${target.origin}/`);
+        } else if (
+          /\/get_vod_info$/i.test(targetPath) ||
+          /\/get_series_info$/i.test(targetPath) ||
+          /\/player_api(\.php)?$/i.test(targetPath)
+        ) {
+          // Nodecast panels often reject self-referential API URLs (Referer = same get_* URL → 400).
+          referer = stripDefaultPortHref(`${target.origin}/`);
         } else {
           referer = stripDefaultPortHref(from.href);
         }
@@ -240,8 +243,14 @@ function buildUpstreamHeaders(
       referer = stripDefaultPortHref(lastM3u8);
     }
   }
+  const isXtreamInfoEndpoint =
+    /\/get_vod_info$/i.test(targetPath) ||
+    /\/get_series_info$/i.test(targetPath) ||
+    /\/player_api(\.php)?$/i.test(targetPath);
   const h: Record<string, string> = {
-    Accept: acceptStr || "*/*",
+    Accept: isXtreamInfoEndpoint
+      ? "application/json, text/plain;q=0.9, */*;q=0.8"
+      : acceptStr || "*/*",
     "Accept-Language": "en-US,en;q=0.9",
     Referer: referer,
     // IPTV providers often whitelist VLC-like UAs and block browser UAs.
@@ -276,8 +285,29 @@ function proxyMiddleware() {
       return;
     }
     const raw = new URL(req.url, "http://localhost");
-    const q = raw.searchParams.get("target");
-    const from = raw.searchParams.get("from");
+    const qb64 = raw.searchParams.get("targetB64");
+    const fb64 = raw.searchParams.get("fromB64");
+    let q = raw.searchParams.get("target");
+    let from = raw.searchParams.get("from");
+    if (qb64) {
+      try {
+        q = fromBase64UrlUtf8(qb64);
+      } catch {
+        res.statusCode = 400;
+        res.end("Bad targetB64");
+        return;
+      }
+    }
+    if (fb64) {
+      try {
+        from = fromBase64UrlUtf8(fb64);
+      } catch {
+        res.statusCode = 400;
+        res.end("Bad fromB64");
+        return;
+      }
+    }
+    if (!from && q) from = q;
     if (!q || !isHttpUrl(q)) {
       res.statusCode = 400;
       res.end("Bad target");

@@ -19,6 +19,24 @@ const r2S3HttpsAgent = new https.Agent({
   minVersion: "TLSv1.2",
 });
 
+/** Cloudflare account IDs are 32 hex chars (Workers / R2 dashboard → Account ID). */
+function invalidR2AccountIdMessage(accountId: string): string | null {
+  const t = accountId.trim();
+  if (/^R2_ACCOUNT_ID$/i.test(t)) {
+    return (
+      "R2_ACCOUNT_ID is still the placeholder text. In Vercel → Settings → Environment Variables, " +
+      "set R2_ACCOUNT_ID to your real Cloudflare Account ID (32 hex characters), not the words R2_ACCOUNT_ID."
+    );
+  }
+  if (t.length !== 32 || !/^[0-9a-f]+$/i.test(t)) {
+    return (
+      "R2_ACCOUNT_ID must be your Cloudflare Account ID: exactly 32 hexadecimal characters " +
+      "(Dashboard → Workers & Pages or R2 → copy Account ID on the right). Wrong values cause TLS handshake failures against R2."
+    );
+  }
+  return null;
+}
+
 function r2S3ApiEndpoint(accountId: string, env: NodeJS.ProcessEnv): string {
   const explicit = env.R2_S3_ENDPOINT?.trim().replace(/\/+$/, "");
   if (explicit) return explicit;
@@ -202,6 +220,13 @@ export async function handleR2PackageCoverRoute(
         error:
           "R2 is not configured (set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME).",
       });
+      return;
+    }
+
+    const accountIdErr = invalidR2AccountIdMessage(cfg.accountId);
+    if (accountIdErr) {
+      logDebug(env, "R2_ACCOUNT_ID invalid", { accountIdPreview: `${cfg.accountId.slice(0, 6)}…` });
+      json(res, 503, { error: accountIdErr });
       return;
     }
 

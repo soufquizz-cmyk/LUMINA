@@ -249,6 +249,40 @@
           </div>
         </div>
       </main>
+
+      <div
+        id="catalog-loading-overlay"
+        class="catalog-loading-overlay hidden"
+        aria-hidden="true"
+        role="status"
+        aria-live="polite"
+        aria-label="Chargement du catalogue"
+      >
+        <div class="catalog-loading-overlay__aurora" aria-hidden="true"></div>
+        <div class="catalog-loading-overlay__grid" aria-hidden="true"></div>
+        <div class="catalog-loading-overlay__vignette" aria-hidden="true"></div>
+        <div class="catalog-loading-overlay__inner">
+          <div class="catalog-loading-overlay__spinner" aria-hidden="true">
+            <div class="catalog-loading-overlay__spinner-ring"></div>
+            <div class="catalog-loading-overlay__play-wrap">
+              <span class="catalog-loading-overlay__play">▶</span>
+            </div>
+          </div>
+          <p class="catalog-loading-overlay__brand">
+            Velora<span>VIP</span>
+          </p>
+          <p id="catalog-loading-status" class="catalog-loading-overlay__status">Chargement du catalogue…</p>
+          <div class="catalog-loading-overlay__eq" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <dialog id="dialog-admin-add-channels" class="admin-add-channels-dialog">

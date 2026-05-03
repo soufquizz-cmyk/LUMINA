@@ -15,6 +15,8 @@ export type LiveStream = {
   direct_source?: string;
   nodecast_channel_id?: string;
   nodecast_source_id?: string;
+  /** Xtream via Nodecast: VOD movie / series row (playback URL differs from live). */
+  nodecast_media?: "live" | "vod" | "series";
 };
 
 export type ProxiedRequestInit = {
@@ -106,9 +108,21 @@ function asArray(payload: unknown): unknown[] {
   if (!payload || typeof payload !== "object") return [];
   const o = payload as Record<string, unknown>;
   if (Array.isArray(o.channels)) return o.channels;
+  /** Xtream `player_api` style: get_series → `{ series: [...] }`, categories → `{ categories: [...] }`. */
+  if (Array.isArray(o.series)) return o.series;
+  if (Array.isArray(o.categories)) return o.categories;
+  if (Array.isArray(o.movie_data)) return o.movie_data;
+  if (Array.isArray(o.movies)) return o.movies;
+  if (Array.isArray(o.vod_streams)) return o.vod_streams;
+  if (Array.isArray(o.streams)) return o.streams;
   if (Array.isArray(o.data)) return o.data;
   if (Array.isArray(o.items)) return o.items;
   if (Array.isArray(o.results)) return o.results;
+  /** Some panels wrap lists in `data: { series: [...] }` (non-array `data`). */
+  if (o.data && typeof o.data === "object" && !Array.isArray(o.data)) {
+    const nested = asArray(o.data);
+    if (nested.length) return nested;
+  }
   return [];
 }
 
@@ -423,15 +437,210 @@ function collectXtreamSourceIdsFromStatus(payload: unknown): string[] {
   return [...out];
 }
 
+export type NodecastCatalogLoadResult = {
+  categories: LiveCategory[];
+  streamsByCat: Map<string, LiveStream[]>;
+  authHeaders?: Record<string, string>;
+  /** Xtream source id used for `/api/proxy/xtream/{id}/…` (VOD / series). */
+  nodecastXtreamSourceId?: string;
+  vodCategories: LiveCategory[];
+  vodStreamsByCat: Map<string, LiveStream[]>;
+  seriesCategories: LiveCategory[];
+  seriesStreamsByCat: Map<string, LiveStream[]>;
+};
+
+async function discoverXtreamSourceIdsInternal(
+  base: string,
+  nodecastAuthHeaders: Record<string, string> | undefined
+): Promise<string[]> {
+  const sourceIdEndpoints = [
+    "/api/sources/status",
+    "/api/xtream/connections",
+    "/api/sources",
+    "/api/proxy/xtream",
+  ];
+  const sourceIds = new Set<string>();
+  for (const ep of sourceIdEndpoints) {
+    try {
+      const payload = await fetchProxiedJsonWithInit<unknown>(`${base}${ep}`, {
+        headers: nodecastAuthHeaders,
+      });
+      if (ep === "/api/sources/status") {
+        for (const id of collectXtreamSourceIdsFromStatus(payload)) sourceIds.add(id);
+      } else {
+        for (const id of parseIdCandidates(payload)) sourceIds.add(id);
+      }
+    } catch {
+      /* keep trying */
+    }
+  }
+  return [...sourceIds];
+}
+
+function mapXtreamCategoryRow(raw: unknown): LiveCategory | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const id = String(o.category_id ?? o.id ?? "").trim();
+  const name = String(o.category_name ?? o.name ?? id).trim();
+  if (!id) return null;
+  return { category_id: id, category_name: name, parent_id: 0 };
+}
+
+function mapNodecastSeriesToStream(
+  raw: unknown,
+  index: number,
+  sourceId: string,
+  /** When API omits `category_id` (per-category fetch), bucket under this package id. */
+  defaultCategoryId?: string
+): LiveStream | null {
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  const name = String(c.name ?? c.title ?? `Série ${index + 1}`).trim();
+  if (!name) return null;
+  const seriesId = Number(c.series_id ?? c.id ?? index + 1);
+  const catRaw = c.category_id ?? c.category_ids;
+  let categoryId: string;
+  if (Array.isArray(catRaw) && catRaw.length) {
+    categoryId = String(catRaw[0]).trim();
+  } else if (catRaw != null && String(catRaw).trim() !== "") {
+    categoryId = String(catRaw).trim();
+  } else {
+    const d = defaultCategoryId?.trim();
+    categoryId = d && d.length > 0 ? d : "uncategorized";
+  }
+  const iconRaw =
+    (typeof c.cover === "string" && c.cover.trim()) ||
+    (typeof c.stream_icon === "string" && c.stream_icon.trim()) ||
+    (typeof c.cover_big === "string" && c.cover_big.trim()) ||
+    "";
+  return {
+    stream_id: Number.isFinite(seriesId) ? seriesId : index + 1,
+    name,
+    category_id: categoryId,
+    stream_icon: iconRaw || undefined,
+    nodecast_source_id: sourceId,
+    nodecast_media: "series",
+  };
+}
+
+async function loadXtreamVodCatalog(
+  base: string,
+  sourceId: string,
+  headers?: Record<string, string>
+): Promise<{ categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } | null> {
+  try {
+    const [catPayload, streamPayload] = await Promise.all([
+      fetchProxiedJsonWithInit<unknown>(
+        `${base}/api/proxy/xtream/${encodeURIComponent(sourceId)}/vod_categories`,
+        { headers }
+      ),
+      fetchProxiedJsonWithInit<unknown>(
+        `${base}/api/proxy/xtream/${encodeURIComponent(sourceId)}/vod_streams`,
+        { headers }
+      ),
+    ]);
+    const mappedStreams = asArray(streamPayload)
+      .map((item, idx) => mapNodecastChannelToLiveStream(item, idx))
+      .filter((s): s is LiveStream => s != null)
+      .map((s) => ({
+        ...s,
+        nodecast_source_id: sourceId,
+        nodecast_media: "vod" as const,
+      }));
+    if (!mappedStreams.length) return null;
+    const mappedCats = asArray(catPayload)
+      .map(mapXtreamCategoryRow)
+      .filter((c): c is LiveCategory => c != null);
+    const categories = mappedCats.length ? mappedCats : categoriesFromStreams(mappedStreams);
+    return { categories, streamsByCat: groupStreamsByCategory(mappedStreams) };
+  } catch {
+    return null;
+  }
+}
+
+async function loadXtreamSeriesCatalog(
+  base: string,
+  sourceId: string,
+  headers?: Record<string, string>
+): Promise<{ categories: LiveCategory[]; streamsByCat: Map<string, LiveStream[]> } | null> {
+  const sid = encodeURIComponent(sourceId);
+  let seriesCats: LiveCategory[] = [];
+  try {
+    const catPayload = await fetchProxiedJsonWithInit<unknown>(
+      `${base}/api/proxy/xtream/${sid}/series_categories`,
+      { headers }
+    );
+    seriesCats = asArray(catPayload)
+      .map(mapXtreamCategoryRow)
+      .filter((c): c is LiveCategory => c != null);
+  } catch {
+    /* categories optional if get_series returns all */
+  }
+
+  let allSeries: LiveStream[] = [];
+  try {
+    const bulk = await fetchProxiedJsonWithInit<unknown>(`${base}/api/proxy/xtream/${sid}/get_series`, {
+      headers,
+    });
+    const arr = asArray(bulk);
+    allSeries = arr
+      .map((item, idx) => mapNodecastSeriesToStream(item, idx, sourceId))
+      .filter((s): s is LiveStream => s != null);
+  } catch {
+    /* try per-category */
+  }
+
+  if (!allSeries.length) {
+    for (const cat of seriesCats) {
+      try {
+        const payload = await fetchProxiedJsonWithInit<unknown>(
+          `${base}/api/proxy/xtream/${sid}/get_series?category_id=${encodeURIComponent(cat.category_id)}`,
+          { headers }
+        );
+        const chunk = asArray(payload)
+          .map((item, idx) => mapNodecastSeriesToStream(item, idx, sourceId, cat.category_id))
+          .filter((s): s is LiveStream => s != null);
+        allSeries.push(...chunk);
+      } catch {
+        /* next category */
+      }
+    }
+  }
+
+  if (!allSeries.length) return null;
+  const categories = seriesCats.length ? seriesCats : categoriesFromStreams(allSeries);
+  return { categories, streamsByCat: groupStreamsByCategory(allSeries) };
+}
+
+async function loadVodAndSeriesCatalogs(
+  base: string,
+  sourceId: string,
+  headers?: Record<string, string>
+): Promise<{
+  nodecastXtreamSourceId: string;
+  vodCategories: LiveCategory[];
+  vodStreamsByCat: Map<string, LiveStream[]>;
+  seriesCategories: LiveCategory[];
+  seriesStreamsByCat: Map<string, LiveStream[]>;
+}> {
+  const [vod, series] = await Promise.all([
+    loadXtreamVodCatalog(base, sourceId, headers),
+    loadXtreamSeriesCatalog(base, sourceId, headers),
+  ]);
+  return {
+    nodecastXtreamSourceId: sourceId,
+    vodCategories: vod?.categories ?? [],
+    vodStreamsByCat: vod?.streamsByCat ?? new Map(),
+    seriesCategories: series?.categories ?? [],
+    seriesStreamsByCat: series?.streamsByCat ?? new Map(),
+  };
+}
+
 export async function tryNodecastLoginAndLoad(
   base: string,
   username: string,
   password: string
-): Promise<{
-  categories: LiveCategory[];
-  streamsByCat: Map<string, LiveStream[]>;
-  authHeaders?: Record<string, string>;
-}> {
+): Promise<NodecastCatalogLoadResult> {
   const loginCandidates = ["/api/auth/login", "/api/login", "/auth/login"];
   let loggedIn = false;
   let nodecastAuthHeaders: Record<string, string> | undefined;
@@ -483,30 +692,8 @@ export async function tryNodecastLoginAndLoad(
   }
 
   if (!streams.length) {
-    const sourceIdEndpoints = [
-      "/api/sources/status",
-      "/api/xtream/connections",
-      "/api/sources",
-      "/api/proxy/xtream",
-    ];
-    const sourceIds = new Set<string>();
-    for (const ep of sourceIdEndpoints) {
-      try {
-        const payload = await fetchProxiedJsonWithInit<unknown>(`${base}${ep}`, {
-          headers: nodecastAuthHeaders,
-        });
-        if (ep === "/api/sources/status") {
-          for (const id of collectXtreamSourceIdsFromStatus(payload)) sourceIds.add(id);
-        } else {
-          for (const id of parseIdCandidates(payload)) sourceIds.add(id);
-        }
-      } catch {
-        // keep trying
-      }
-    }
-    if (sourceIds.size === 0) {
-      sourceIds.add("9");
-    }
+    const discovered = await discoverXtreamSourceIdsInternal(base, nodecastAuthHeaders);
+    const sourceIds = discovered.length ? discovered : ["9"];
 
     for (const sourceId of sourceIds) {
       try {
@@ -538,10 +725,16 @@ export async function tryNodecastLoginAndLoad(
           })
           .filter((c): c is LiveCategory => c != null);
         const categories = mappedCats.length ? mappedCats : categoriesFromStreams(streams);
+        const media = await loadVodAndSeriesCatalogs(base, sourceId, nodecastAuthHeaders);
         return {
           categories,
           streamsByCat: groupStreamsByCategory(streams),
           authHeaders: nodecastAuthHeaders,
+          nodecastXtreamSourceId: media.nodecastXtreamSourceId,
+          vodCategories: media.vodCategories,
+          vodStreamsByCat: media.vodStreamsByCat,
+          seriesCategories: media.seriesCategories,
+          seriesStreamsByCat: media.seriesStreamsByCat,
         };
       } catch {
         // try next source id
@@ -552,10 +745,24 @@ export async function tryNodecastLoginAndLoad(
   }
 
   const categories = categoriesFromStreams(streams);
+  const discovered = await discoverXtreamSourceIdsInternal(base, nodecastAuthHeaders);
+  const tryIds = discovered.length ? discovered : ["9"];
+  let mediaExtras = await loadVodAndSeriesCatalogs(base, tryIds[0], nodecastAuthHeaders);
+  for (let i = 1; i < tryIds.length; i++) {
+    if (mediaExtras.vodStreamsByCat.size > 0 || mediaExtras.seriesStreamsByCat.size > 0) {
+      break;
+    }
+    mediaExtras = await loadVodAndSeriesCatalogs(base, tryIds[i], nodecastAuthHeaders);
+  }
   return {
     categories,
     streamsByCat: groupStreamsByCategory(streams),
     authHeaders: nodecastAuthHeaders,
+    nodecastXtreamSourceId: mediaExtras.nodecastXtreamSourceId,
+    vodCategories: mediaExtras.vodCategories,
+    vodStreamsByCat: mediaExtras.vodStreamsByCat,
+    seriesCategories: mediaExtras.seriesCategories,
+    seriesStreamsByCat: mediaExtras.seriesStreamsByCat,
   };
 }
 
@@ -599,6 +806,82 @@ export async function resolveNodecastStreamUrl(
       if (url) return url;
     } catch {
       // try next endpoint
+    }
+  }
+  return null;
+}
+
+export async function resolveNodecastVodStreamUrl(
+  base: string,
+  s: LiveStream,
+  authHeaders?: Record<string, string>
+): Promise<string | null> {
+  const rawSid = (s.nodecast_source_id ?? "").trim();
+  if (!rawSid) return null;
+  const sid = encodeURIComponent(rawSid);
+  const streamId = encodeURIComponent(String(s.stream_id));
+  const candidates = [
+    `${base}/api/proxy/xtream/${sid}/stream/${streamId}/vod?container=m3u8`,
+    `${base}/api/proxy/xtream/${sid}/stream/${streamId}/vod?container=ts`,
+    `${base}/api/proxy/xtream/${sid}/stream/${streamId}/vod`,
+    `${base}/api/proxy/xtream/${sid}/vod/${streamId}.m3u8`,
+    `${base}/api/proxy/xtream/${sid}/movie/${streamId}`,
+  ];
+  for (const candidate of candidates) {
+    const playable = await resolveCandidateToPlayableUrl(candidate, authHeaders);
+    if (playable) return playable;
+  }
+  return null;
+}
+
+function extractFirstEpisodeStreamId(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const root = payload as Record<string, unknown>;
+  const data = root.data && typeof root.data === "object" ? (root.data as Record<string, unknown>) : root;
+  const eps = data.episodes;
+  if (eps && typeof eps === "object" && !Array.isArray(eps)) {
+    const seasonKeys = Object.keys(eps).sort((a, b) => Number(a) - Number(b));
+    for (const sk of seasonKeys) {
+      const arr = (eps as Record<string, unknown>)[sk];
+      if (!Array.isArray(arr)) continue;
+      for (const ep of arr) {
+        if (!ep || typeof ep !== "object") continue;
+        const e = ep as Record<string, unknown>;
+        const sid = Number(e.stream_id ?? e.id);
+        if (Number.isFinite(sid) && sid > 0) return sid;
+      }
+    }
+  }
+  return null;
+}
+
+/** Resolve first playable episode for a Xtream series (get_series_info → VOD stream). */
+export async function resolveNodecastSeriesPlayableUrl(
+  base: string,
+  seriesId: number,
+  sourceId: string,
+  authHeaders?: Record<string, string>
+): Promise<string | null> {
+  const sid = encodeURIComponent(sourceId);
+  const seriesQ = encodeURIComponent(String(seriesId));
+  const infoUrls = [
+    `${base}/api/proxy/xtream/${sid}/get_series_info?series_id=${seriesQ}`,
+    `${base}/api/proxy/xtream/${sid}/series_info?series_id=${seriesQ}`,
+  ];
+  for (const u of infoUrls) {
+    try {
+      const payload = await fetchProxiedJsonWithInit<unknown>(u, { headers: authHeaders });
+      const epId = extractFirstEpisodeStreamId(payload);
+      if (epId == null) continue;
+      const epStream: LiveStream = {
+        stream_id: epId,
+        name: "Episode",
+        nodecast_source_id: sourceId,
+        nodecast_media: "vod",
+      };
+      return resolveNodecastVodStreamUrl(base, epStream, authHeaders);
+    } catch {
+      /* try next URL */
     }
   }
   return null;

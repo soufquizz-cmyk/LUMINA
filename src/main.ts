@@ -25,9 +25,12 @@ import { fetchAndApplyChannelNamePrefixes } from "./channelNamePrefixesSupabase"
 import { fetchAndApplyChannelHideNeedles } from "./channelHideNeedlesSupabase";
 import { buildProviderAdminConfig } from "./providerLayout";
 import {
+  type LiveCategory,
   type LiveStream,
   tryNodecastLoginAndLoad,
   resolveNodecastStreamUrl,
+  resolveNodecastVodStreamUrl,
+  resolveNodecastSeriesPlayableUrl,
   proxiedUrl,
   imageUrlForDisplay,
   normalizeServerInput,
@@ -76,6 +79,8 @@ const elPass = $("#pass") as HTMLInputElement;
 const elBtnConnect = $("#btn-connect") as HTMLButtonElement;
 const elLoginStatus = $("#login-status") as HTMLSpanElement;
 const elMain = $("#main") as HTMLElement;
+const elCatalogLoadingOverlay = $("#catalog-loading-overlay") as HTMLDivElement | null;
+const elCatalogLoadingStatus = $("#catalog-loading-status") as HTMLParagraphElement | null;
 const elLoginPanel = document.querySelector(".login-panel") as HTMLElement;
 const elCatPills = $("#cat-pills") as HTMLDivElement;
 const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
@@ -163,6 +168,9 @@ let selectedPillId: PillId = "all";
 let pillDefs: Array<{ id: string; label: string }> = [ALL_PILL];
 
 let adminConfig: AdminConfig = { ...EMPTY_ADMIN_CONFIG };
+/** Pays › bouquets dérivés des catégories VOD / séries (même logique que le live). */
+let vodAdminConfig: AdminConfig = { ...EMPTY_ADMIN_CONFIG };
+let seriesAdminConfig: AdminConfig = { ...EMPTY_ADMIN_CONFIG };
 
 type UiTab = "live" | "movies" | "series";
 type UiShell = "packages" | "content";
@@ -226,6 +234,11 @@ let state: {
   serverInfo: ServerInfo;
   /** Full provider catalog (used only to resolve streams matched by admin rules). */
   streamsByCatAll: Map<string, LiveStream[]>;
+  nodecastXtreamSourceId?: string;
+  vodCategories: LiveCategory[];
+  vodStreamsByCat: Map<string, LiveStream[]>;
+  seriesCategories: LiveCategory[];
+  seriesStreamsByCat: Map<string, LiveStream[]>;
 } | null = null;
 
 let hls: Hls | null = null;
@@ -403,6 +416,20 @@ function setLoginStatus(msg: string, isError = false): void {
   elLoginStatus.classList.toggle("error", isError);
 }
 
+function setCatalogLoadingVisible(visible: boolean, statusText?: string): void {
+  const el = elCatalogLoadingOverlay;
+  if (!el) return;
+  if (elCatalogLoadingStatus) {
+    if (visible && statusText) {
+      elCatalogLoadingStatus.textContent = statusText;
+    } else if (!visible) {
+      elCatalogLoadingStatus.textContent = "Chargement du catalogue…";
+    }
+  }
+  el.classList.toggle("hidden", !visible);
+  el.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
 function envAutoConnectConfigured(): boolean {
   const u = import.meta.env.VITE_NODECAST_URL?.trim();
   const n = import.meta.env.VITE_NODECAST_USERNAME?.trim();
@@ -427,8 +454,7 @@ function prepareEnvAutoconnectUi(): void {
   elMainTabs.classList.remove("hidden");
   elContentView.classList.add("hidden");
   elPackagesView.classList.remove("hidden");
-  elPackagesView.innerHTML =
-    '<div class="vel-empty-msg" style="grid-column: 1 / -1; text-align: center; padding: 2rem 1rem">Connexion au catalogue…</div>';
+  elPackagesView.innerHTML = "";
 }
 
 function syncPillDefsForPackage(packageId: string): void {
@@ -460,8 +486,8 @@ function updatePillsVisibility(): void {
 }
 
 function renderCategoryPills(): void {
+  if (uiTab !== "live" || uiAdminPackageId == null || !state) return;
   elCatPills.innerHTML = "";
-  if (!state || uiAdminPackageId == null) return;
   if (!pillDefs.some((p) => p.id === selectedPillId)) {
     selectedPillId = "all";
   }
@@ -793,7 +819,13 @@ function renderPackageChannelList(): void {
   syncAdminAddChannelsButton();
 }
 
-/** Provider-inferred countries plus Supabase-only rows (deduped by display name). */
+function providerLayoutForUiTab(): AdminConfig {
+  if (uiTab === "movies") return vodAdminConfig;
+  if (uiTab === "series") return seriesAdminConfig;
+  return adminConfig;
+}
+
+/** Pays du header : même liste que le live (catalogue + Supabase), aussi pour Films / Séries. */
 function countryRowsForSelect(): AdminCountry[] {
   const provider = adminConfig.countries;
   const seen = new Set(provider.map((c) => c.name.trim().toLowerCase()));
@@ -904,10 +936,10 @@ elToggleAdminUi?.addEventListener("change", () => {
   if (!elToggleAdminUi.checked && elDialogAddChannels?.open) {
     closeAddChannelsToPackageDialog();
   }
-  if (state && uiShell === "packages" && uiTab === "live") {
+  if (state && uiShell === "packages") {
     renderPackagesGrid();
   }
-  if (state && uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
+  if (state && uiShell === "content" && uiAdminPackageId) {
     renderPackageChannelList();
   }
   syncAdminAddChannelsButton();
@@ -920,8 +952,8 @@ window.addEventListener("popstate", () => {
 window.addEventListener("velora-admin-session-changed", () => {
   syncAdminSettingsButton();
   void refreshSupabaseHierarchy().then(() => {
-    if (state && uiShell === "packages" && uiTab === "live") renderPackagesGrid();
-    if (state && uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
+    if (state && uiShell === "packages") renderPackagesGrid();
+    if (state && uiShell === "content" && uiAdminPackageId) {
       renderPackageChannelList();
     }
     syncAdminAddChannelsButton();
@@ -944,13 +976,15 @@ window.addEventListener("velora-settings-closed", () => {
   }
 });
 
-/** Live categories from the provider for the current header selection (catalogue `country_id`). */
+/** Bouquets fournisseur (live / VOD / séries) pour le pays sélectionné dans le header. */
 function packagesForSelectedCountry(): AdminPackage[] {
+  const layout = providerLayoutForUiTab();
+  const liveCountries = adminConfig.countries;
   if (!selectedAdminCountryId) return [];
   if (isLikelyUuid(selectedAdminCountryId)) {
     /* Canonical pays from Supabase use UUID ids — same shape as admin_countries. */
-    if (adminConfig.countries.some((c) => c.id === selectedAdminCountryId)) {
-      return adminConfig.packages
+    if (liveCountries.some((c) => c.id === selectedAdminCountryId)) {
+      return layout.packages
         .filter((p) => p.country_id === selectedAdminCountryId)
         .sort((a, b) => a.name.localeCompare(b.name, "fr"));
     }
@@ -958,13 +992,13 @@ function packagesForSelectedCountry(): AdminPackage[] {
     if (!dbC) return [];
     const key = normalizeCountryKey(dbC.name);
     if (!key) return [];
-    const prov = adminConfig.countries.find((c) => normalizeCountryKey(c.name) === key);
+    const prov = liveCountries.find((c) => normalizeCountryKey(c.name) === key);
     if (!prov) return [];
-    return adminConfig.packages
+    return layout.packages
       .filter((p) => p.country_id === prov.id)
       .sort((a, b) => a.name.localeCompare(b.name, "fr"));
   }
-  return adminConfig.packages
+  return layout.packages
     .filter((p) => p.country_id === selectedAdminCountryId)
     .sort((a, b) => a.name.localeCompare(b.name, "fr"));
 }
@@ -974,6 +1008,9 @@ function currentCountryDisplayLabel(): string | null {
   if (isLikelyUuid(selectedAdminCountryId)) {
     const dbC = dbAdminCountries.find((c) => c.id === selectedAdminCountryId);
     if (dbC) return dbC.name;
+    const liveProv = adminConfig.countries.find((c) => c.id === selectedAdminCountryId);
+    if (liveProv) return liveProv.name;
+    return null;
   }
   const prov = adminConfig.countries.find((c) => c.id === selectedAdminCountryId);
   return prov?.name ?? null;
@@ -1006,6 +1043,12 @@ function curationMapForSelection(): Map<number, string> | null {
 
 function streamsDisplayedForOpenPackage(packageId: string): LiveStream[] {
   if (!state) return [];
+  if (uiTab === "movies") {
+    return state.vodStreamsByCat.get(String(packageId)) ?? [];
+  }
+  if (uiTab === "series") {
+    return state.seriesStreamsByCat.get(String(packageId)) ?? [];
+  }
   return listStreamsForOpenedPackage({
     packageId,
     streamsByCatAll: state.streamsByCatAll,
@@ -1067,6 +1110,9 @@ function matchedDbCountryIdForSelection(): string | null {
 
 function mergedPackagesForGrid(): AdminPackage[] {
   const provider = packagesForSelectedCountry();
+  if (uiTab === "movies" || uiTab === "series") {
+    return [...provider].sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }
   const sid = matchedDbCountryIdForSelection();
   const fromDb = sid ? dbAdminPackages.filter((p) => p.country_id === sid) : [];
   const base = [...fromDb, ...provider];
@@ -1083,13 +1129,16 @@ function mergedPackagesForGrid(): AdminPackage[] {
 }
 
 function findPackageById(packageId: string): AdminPackage | undefined {
-  if (isSelectedCountryFrance() && selectedAdminCountryId) {
+  if (uiTab === "live" && isSelectedCountryFrance() && selectedAdminCountryId) {
     const syn = FRANCE_SYNTH_PACKAGES.find((t) => t.id === packageId);
     if (syn) {
       return { id: syn.id, country_id: selectedAdminCountryId, name: syn.name };
     }
   }
-  return adminConfig.packages.find((p) => p.id === packageId) ?? dbAdminPackages.find((p) => p.id === packageId);
+  return (
+    providerLayoutForUiTab().packages.find((p) => p.id === packageId) ??
+    (uiTab === "live" ? dbAdminPackages.find((p) => p.id === packageId) : undefined)
+  );
 }
 
 function httpsCatalogCoverOverride(packageId: string): string | null {
@@ -1123,6 +1172,7 @@ function renderPackagesGrid(): void {
   elPackagesView.innerHTML = "";
   const st = state;
   if (!st) return;
+  const gridEmojiFallback = uiTab === "movies" ? "🎬" : uiTab === "series" ? "📺" : "📡";
 
   if (countryRowsForSelect().length === 0) {
     const empty = document.createElement("div");
@@ -1144,7 +1194,7 @@ function renderPackagesGrid(): void {
   }
 
   const showAdminGridTools =
-    isAdminSession() && Boolean(getSupabaseClient()) && readAdminGridToolsEnabled();
+    isAdminSession() && Boolean(getSupabaseClient()) && readAdminGridToolsEnabled() && uiTab === "live";
   if (showAdminGridTools) appendAddPackageCard();
 
   const pkgs = mergedPackagesForGrid();
@@ -1326,14 +1376,14 @@ function renderPackagesGrid(): void {
           });
         }
         img.remove();
-        if (channelFirstIcon) appendProxiedIcon(channelFirstIcon, "📡");
-        else appendEmoji("📡");
+        if (channelFirstIcon) appendProxiedIcon(channelFirstIcon, gridEmojiFallback);
+        else appendEmoji(gridEmojiFallback);
       });
       card.appendChild(img);
     } else if (channelFirstIcon) {
-      appendProxiedIcon(channelFirstIcon, "📡");
+      appendProxiedIcon(channelFirstIcon, gridEmojiFallback);
     } else {
-      appendEmoji("📡");
+      appendEmoji(gridEmojiFallback);
     }
 
     const title = document.createElement("span");
@@ -1353,7 +1403,11 @@ function renderPackagesGrid(): void {
     empty.className = "vel-empty-msg";
     empty.style.gridColumn = "1 / -1";
     empty.textContent =
-      "Aucune catégorie live pour ce pays dans le catalogue fournisseur. Essayez un autre pays ou « Autres ».";
+      uiTab === "movies"
+        ? "Aucun bouquet (catégorie) VOD pour ce pays. Essayez un autre pays ou « Autres »."
+        : uiTab === "series"
+          ? "Aucun bouquet (catégorie) séries pour ce pays. Essayez un autre pays ou « Autres »."
+          : "Aucune catégorie live pour ce pays dans le catalogue fournisseur. Essayez un autre pays ou « Autres ».";
     elPackagesView.appendChild(empty);
   }
 }
@@ -1362,10 +1416,11 @@ function openAdminPackage(packageId: string): void {
   if (!state) return;
   const pkg = findPackageById(packageId);
   if (!pkg) return;
+  const tab: UiTab = uiTab === "movies" || uiTab === "series" ? uiTab : "live";
   uiShell = "content";
-  uiTab = "live";
+  uiTab = tab;
   uiAdminPackageId = packageId;
-  setTabsActive("live");
+  setTabsActive(tab);
   applyThemeForPackage(pkg);
   elPackagesView.classList.add("hidden");
   elMainTabs.classList.add("hidden");
@@ -1377,11 +1432,11 @@ function openAdminPackage(packageId: string): void {
   syncAdminAddChannelsButton();
 }
 
-function goHome(): void {
+/** Grille bouquets : conserve l’onglet (Live / Films / Séries). */
+function showPackagesShell(): void {
   uiShell = "packages";
-  uiTab = "live";
   uiAdminPackageId = null;
-  setTabsActive("live");
+  setTabsActive(uiTab);
   applyPresetTheme("default");
   elPackagesView.classList.remove("hidden");
   elMainTabs.classList.remove("hidden");
@@ -1390,6 +1445,11 @@ function goHome(): void {
   selectedPillId = "all";
   syncAdminAddChannelsButton();
   if (state) renderPackagesGrid();
+}
+
+function goLiveHome(): void {
+  uiTab = "live";
+  showPackagesShell();
 }
 
 async function deleteDbPackageById(packageId: string): Promise<void> {
@@ -1882,7 +1942,13 @@ elDapSubmit.addEventListener("click", () => {
   })();
 });
 
-function showVodPlaceholder(kind: "movies" | "series"): void {
+function countStreamsInMap(m: Map<string, LiveStream[]>): number {
+  let n = 0;
+  for (const list of m.values()) n += list.length;
+  return n;
+}
+
+function showVodPlaceholder(kind: "movies" | "series", reason: "no-nodecast" | "empty" = "no-nodecast"): void {
   uiShell = "content";
   uiTab = kind;
   uiAdminPackageId = null;
@@ -1895,19 +1961,51 @@ function showVodPlaceholder(kind: "movies" | "series"): void {
   elDynamicList.innerHTML = "";
   const msg = document.createElement("div");
   msg.className = "vel-empty-msg";
-  msg.innerHTML =
-    kind === "movies"
-      ? "Les <strong>films</strong> (VOD) ne sont pas encore branchés sur ce lecteur Nodecast.<br/>Utilisez <strong>DIRECT TV</strong> pour le live."
-      : "Les <strong>séries</strong> (VOD) ne sont pas encore branchées sur ce lecteur Nodecast.<br/>Utilisez <strong>DIRECT TV</strong> pour le live.";
+  if (reason === "empty") {
+    msg.innerHTML =
+      kind === "movies"
+        ? "Aucun <strong>film</strong> (VOD) dans le catalogue pour cette source Xtream."
+        : "Aucune <strong>série</strong> dans le catalogue pour cette source Xtream.";
+  } else {
+    msg.innerHTML =
+      kind === "movies"
+        ? "Les <strong>films</strong> (VOD) sont disponibles après connexion <strong>Nodecast</strong> avec un proxy Xtream (<code>vod_categories</code> / <code>vod_streams</code>)."
+        : "Les <strong>séries</strong> sont disponibles après connexion <strong>Nodecast</strong> avec un proxy Xtream (<code>series_categories</code> / <code>get_series</code>).";
+  }
   elDynamicList.appendChild(msg);
+}
+
+function openNodecastMediaShell(tab: "movies" | "series"): void {
+  if (!state || state.mode !== "nodecast") {
+    showVodPlaceholder(tab, "no-nodecast");
+    return;
+  }
+  const map = tab === "movies" ? state.vodStreamsByCat : state.seriesStreamsByCat;
+  if (countStreamsInMap(map) === 0) {
+    showVodPlaceholder(tab, "empty");
+    return;
+  }
+  uiTab = tab;
+  uiShell = "packages";
+  uiAdminPackageId = null;
+  setTabsActive(tab);
+  applyPresetTheme("default");
+  elPackagesView.classList.remove("hidden");
+  elMainTabs.classList.remove("hidden");
+  elContentView.classList.add("hidden");
+  elCatPillsWrap.classList.add("hidden");
+  selectedPillId = "all";
+  populateCountrySelectFromAdmin();
+  renderPackagesGrid();
+  syncAdminAddChannelsButton();
 }
 
 function onTabClick(tab: UiTab): void {
   if (tab === "live") {
-    goHome();
+    goLiveHome();
     return;
   }
-  showVodPlaceholder(tab === "movies" ? "movies" : "series");
+  openNodecastMediaShell(tab === "movies" ? "movies" : "series");
 }
 
 async function playStreamByMode(s: LiveStream): Promise<void> {
@@ -1915,14 +2013,26 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
   if (state.mode === "nodecast") {
     showPlayerChrome(true);
     elNowPlaying.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
-    const resolved = await resolveNodecastStreamUrl(
-      state.base,
-      s,
-      state.nodecastAuthHeaders
-    );
+    let resolved: string | null = null;
+    if (s.nodecast_media === "series" && s.nodecast_source_id) {
+      resolved = await resolveNodecastSeriesPlayableUrl(
+        state.base,
+        s.stream_id,
+        s.nodecast_source_id,
+        state.nodecastAuthHeaders
+      );
+    } else if (s.nodecast_media === "vod") {
+      resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
+    } else {
+      resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
+    }
     if (!resolved) {
       elNowPlaying.innerHTML = nowPlayingErrorMarkup(
-        "Impossible de résoudre l’URL de cette chaîne (API Nodecast)."
+        s.nodecast_media === "series"
+          ? "Impossible de lire cette série (épisode / API get_series_info)."
+          : s.nodecast_media === "vod"
+            ? "Impossible de résoudre l’URL de ce film (proxy VOD Nodecast)."
+            : "Impossible de résoudre l’URL de cette chaîne (API Nodecast)."
       );
       return;
     }
@@ -1966,8 +2076,10 @@ async function connect(): Promise<void> {
   setLoginStatus("Connexion à Nodecast…");
 
   try {
+    setCatalogLoadingVisible(true, "Connexion au serveur…");
     const mode: "nodecast" = "nodecast";
     const nodecast = await tryNodecastLoginAndLoad(base, username, password);
+    setCatalogLoadingVisible(true, "Synchronisation du catalogue…");
     const streamsByCat = nodecast.streamsByCat;
     const nodecastAuthHeaders = nodecast.authHeaders;
     const serverInfo: ServerInfo = {
@@ -1980,6 +2092,8 @@ async function connect(): Promise<void> {
     await fetchAndApplyChannelNamePrefixes();
     await fetchAndApplyChannelHideNeedles();
     adminConfig = buildProviderAdminConfig(nodecast.categories, streamsByCat);
+    vodAdminConfig = buildProviderAdminConfig(nodecast.vodCategories, nodecast.vodStreamsByCat);
+    seriesAdminConfig = buildProviderAdminConfig(nodecast.seriesCategories, nodecast.seriesStreamsByCat);
     await refreshSupabaseHierarchy();
 
     state = {
@@ -1990,6 +2104,11 @@ async function connect(): Promise<void> {
       nodecastAuthHeaders,
       serverInfo: serverInfo!,
       streamsByCatAll: new Map(streamsByCat),
+      nodecastXtreamSourceId: nodecast.nodecastXtreamSourceId,
+      vodCategories: nodecast.vodCategories,
+      vodStreamsByCat: nodecast.vodStreamsByCat,
+      seriesCategories: nodecast.seriesCategories,
+      seriesStreamsByCat: nodecast.seriesStreamsByCat,
     };
 
     selectedPillId = "all";
@@ -1997,7 +2116,7 @@ async function connect(): Promise<void> {
     destroyPlayer();
     elNowPlaying.textContent = "";
 
-    goHome();
+    goLiveHome();
     elLoginPanel.classList.add("hidden");
     elMain.classList.remove("hidden");
     syncAdminSettingsButton();
@@ -2017,6 +2136,7 @@ async function connect(): Promise<void> {
       elHeaderLoginOnly?.classList.remove("hidden");
     }
   } finally {
+    setCatalogLoadingVisible(false);
     elBtnConnect.disabled = false;
   }
 }
@@ -2025,6 +2145,8 @@ function disconnect(): void {
   setChannelNamePrefixesFromDatabase(null);
   setChannelHideNeedlesFromDatabase(null);
   adminConfig = { ...EMPTY_ADMIN_CONFIG };
+  vodAdminConfig = { ...EMPTY_ADMIN_CONFIG };
+  seriesAdminConfig = { ...EMPTY_ADMIN_CONFIG };
   dbAdminCountries = [];
   dbAdminPackages = [];
   streamCurationByCountry = new Map();
@@ -2071,18 +2193,22 @@ function onCountryChange(): void {
 
   if (!state) return;
 
-  if (uiShell === "content" && uiTab === "live" && uiAdminPackageId) {
+  if (uiShell === "content" && uiAdminPackageId) {
     const merged = mergedPackagesForGrid();
     if (!merged.some((p) => p.id === uiAdminPackageId)) {
-      goHome();
+      showPackagesShell();
       return;
     }
-    syncPillDefsForPackage(uiAdminPackageId);
-    renderCategoryPills();
+    if (uiTab === "live") {
+      syncPillDefsForPackage(uiAdminPackageId);
+      renderCategoryPills();
+    } else {
+      renderPackageChannelList();
+    }
     return;
   }
 
-  if (uiShell === "packages" && uiTab === "live") {
+  if (uiShell === "packages") {
     renderPackagesGrid();
   }
 }
@@ -2090,10 +2216,7 @@ function onCountryChange(): void {
 elBtnConnect.addEventListener("click", () => void connect());
 elBtnLogout.addEventListener("click", disconnect);
 elBtnBackHome.addEventListener("click", () => {
-  if (uiTab === "live") goHome();
-  else {
-    goHome();
-  }
+  showPackagesShell();
 });
 
 elTabLive.addEventListener("click", () => onTabClick("live"));

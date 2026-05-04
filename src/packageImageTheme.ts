@@ -1,5 +1,6 @@
 /**
  * Derive Velora CSS palette from a package hero image (canvas sampling).
+ * Accent = couleur du **histogramme RGB** la plus représentée (pas la moyenne globale de l’image).
  * Always loads via the app `/proxy` for HTTPS — canvas needs CORS-safe bytes; direct R2 `*.r2.dev`
  * URLs omit `Access-Control-Allow-Origin`, which breaks `crossOrigin="anonymous"` (repeated console errors).
  */
@@ -10,15 +11,17 @@ import { proxiedUrl } from "./nodecastCatalog";
 const imageThemeCache = new Map<string, PresetTheme | false>();
 
 function cacheKey(packageId: string, imageUrl: string): string {
-  return `${packageId}\0${imageUrl}`;
+  /* v2 = histogramme dominant (réinvalide le cache v1 moyenne / score saturé). */
+  return `v2\0${packageId}\0${imageUrl}`;
 }
 
 /** Call after `cover_url` / override image changes for that package. */
 export function invalidatePackageImageThemeCache(packageId: string): void {
   if (!packageId.trim()) return;
-  const p = `${packageId}\0`;
+  const legacy = `${packageId}\0`;
+  const v2 = `v2\0${packageId}\0`;
   for (const k of [...imageThemeCache.keys()]) {
-    if (k.startsWith(p)) imageThemeCache.delete(k);
+    if (k.startsWith(legacy) || k.startsWith(v2)) imageThemeCache.delete(k);
   }
 }
 
@@ -118,6 +121,9 @@ function contrastRatio(rgb1: { r: number; g: number; b: number }, rgb2: { r: num
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** 8 niveaux / canal → regroupe les teintes proches pour le mode d’histogramme. */
+const ACCENT_BIN_SHIFT = 5;
+
 function sampleImageToAccent(img: HTMLImageElement): { r: number; g: number; b: number } | null {
   const w = 56;
   const h = 56;
@@ -138,40 +144,44 @@ function sampleImageToAccent(img: HTMLImageElement): { r: number; g: number; b: 
     return null;
   }
   const d = data.data;
-  let bestScore = -1;
-  let br = 138,
-    bg = 43,
-    bb = 226;
-  let ar = 0,
-    ag = 0,
-    ab = 0,
-    an = 0;
-  for (let i = 0; i < d.length; i += 4 * 3) {
+  const defaultAccent = { r: 138, g: 43, b: 226 };
+  const bins = new Map<number, { n: number; sr: number; sg: number; sb: number }>();
+
+  for (let i = 0; i < d.length; i += 4) {
     const a = d[i + 3] ?? 255;
     if (a < 28) continue;
     const R = d[i] ?? 0;
     const G = d[i + 1] ?? 0;
     const B = d[i + 2] ?? 0;
-    const { s, l } = rgbToHsl(R, G, B);
+    const { l } = rgbToHsl(R, G, B);
     if (l < 0.05 || l > 0.97) continue;
-    ar += R;
-    ag += G;
-    ab += B;
-    an++;
-    const score = s * (1 - Math.abs(l - 0.55) * 1.2);
-    if (score > bestScore) {
-      bestScore = score;
-      br = R;
-      bg = G;
-      bb = B;
+    const kr = R >> ACCENT_BIN_SHIFT;
+    const kg = G >> ACCENT_BIN_SHIFT;
+    const kb = B >> ACCENT_BIN_SHIFT;
+    const key = (kr << 6) | (kg << 3) | kb;
+    let bin = bins.get(key);
+    if (!bin) {
+      bin = { n: 0, sr: 0, sg: 0, sb: 0 };
+      bins.set(key, bin);
+    }
+    bin.n++;
+    bin.sr += R;
+    bin.sg += G;
+    bin.sb += B;
+  }
+
+  if (bins.size === 0) return defaultAccent;
+
+  let bestKey = 0;
+  let bestN = -1;
+  for (const [key, bin] of bins) {
+    if (bin.n > bestN) {
+      bestN = bin.n;
+      bestKey = key;
     }
   }
-  if (bestScore < 0.08 && an > 0) {
-    br = ar / an;
-    bg = ag / an;
-    bb = ab / an;
-  }
-  return { r: br, g: bg, b: bb };
+  const win = bins.get(bestKey)!;
+  return { r: win.sr / win.n, g: win.sg / win.n, b: win.sb / win.n };
 }
 
 function buildPaletteFromAccent(accent: { r: number; g: number; b: number }): PresetTheme {

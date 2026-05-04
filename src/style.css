@@ -3873,7 +3873,7 @@ a.topbar__admin-link {
 
 /* Admin dialogs — package cover upload (no URL paste) */
 .admin-cover-dialog__panel {
-  width: min(26rem, 100%);
+  width: min(32rem, 100%);
   padding: 1.35rem 1.4rem 1.4rem;
   border-radius: calc(var(--radius) + 4px);
   background: linear-gradient(165deg, rgba(255, 255, 255, 0.06) 0%, transparent 42%), var(--bg-panel);
@@ -3881,6 +3881,75 @@ a.topbar__admin-link {
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.35) inset,
     0 20px 56px rgba(0, 0, 0, 0.58);
+}
+
+.admin-cover-theme-fieldset {
+  margin: 1.25rem 0 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.admin-cover-theme-hint {
+  margin: 0 0 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted, rgba(255, 255, 255, 0.65));
+}
+
+.admin-cover-theme-hint code {
+  font-size: 0.76em;
+}
+
+.admin-cover-theme-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.admin-cover-theme-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.admin-cover-theme-row--wide {
+  grid-column: 1 / -1;
+}
+
+.admin-cover-theme-row__label {
+  flex: 0 1 auto;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.admin-cover-theme-row input[type="color"] {
+  flex: 0 0 auto;
+  width: 2.75rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.admin-cover-theme-text {
+  flex: 1 1 8rem;
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+}
+
+.admin-cover-theme-reset {
+  margin-top: 0.15rem;
 }
 
 .cover-upload-field-label {

@@ -391,7 +391,7 @@
 
     <dialog id="dialog-package-cover" class="admin-channel-assign-dialog admin-cover-dialog">
       <div class="admin-add-package-dialog__panel admin-cover-dialog__panel">
-        <h2 class="admin-add-package-dialog__title">Image du bouquet</h2>
+        <h2 class="admin-add-package-dialog__title">Image et couleurs du bouquet</h2>
         <p id="pce-package-name" class="admin-add-package-dialog__hint"></p>
         <input type="hidden" id="pce-package-id" value="" />
         <div class="cover-upload">
@@ -417,6 +417,53 @@
             <button type="button" id="pce-cover-pick" class="cover-upload__btn">Choisir une image</button>
           </div>
         </div>
+        <fieldset class="admin-cover-theme-fieldset">
+          <legend class="cover-upload-field-label">Couleurs du thème (lecteur)</legend>
+          <p class="admin-cover-theme-hint">
+            Enregistré dans Supabase (<code>admin_packages</code> ou surcharges catalogue). Les couleurs identiques au
+            préréglage du nom ne sont pas stockées (le thème peut encore suivre l’image). Utilisez « Réinitialiser les
+            couleurs » pour tout effacer.
+          </p>
+          <div class="admin-cover-theme-grid">
+            <label class="admin-cover-theme-row">
+              <span class="admin-cover-theme-row__label">Fond</span>
+              <input type="color" id="pce-theme-bg" title="Fond" />
+            </label>
+            <label class="admin-cover-theme-row">
+              <span class="admin-cover-theme-row__label">Surfaces</span>
+              <input type="color" id="pce-theme-surface" title="Surfaces" />
+            </label>
+            <label class="admin-cover-theme-row">
+              <span class="admin-cover-theme-row__label">Accent</span>
+              <input type="color" id="pce-theme-primary" title="Accent" />
+            </label>
+            <label class="admin-cover-theme-row admin-cover-theme-row--wide">
+              <span class="admin-cover-theme-row__label">Halo (accent)</span>
+              <input
+                type="text"
+                id="pce-theme-glow"
+                class="admin-cover-theme-text"
+                placeholder="rgba(138, 43, 226, 0.3)"
+                spellcheck="false"
+                autocomplete="off"
+              />
+            </label>
+            <label class="admin-cover-theme-row admin-cover-theme-row--wide">
+              <span class="admin-cover-theme-row__label">Lien « retour » (optionnel)</span>
+              <input
+                type="text"
+                id="pce-theme-back"
+                class="admin-cover-theme-text"
+                placeholder="#a78bfa ou rgba(…)"
+                spellcheck="false"
+                autocomplete="off"
+              />
+            </label>
+          </div>
+          <button type="button" id="pce-theme-reset" class="countries-admin-cancel admin-cover-theme-reset">
+            Réinitialiser les couleurs
+          </button>
+        </fieldset>
         <p id="pce-status" class="status" aria-live="polite"></p>
         <div class="actions">
           <button type="button" id="pce-clear" class="countries-admin-cancel">Retirer l’image</button>

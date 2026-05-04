@@ -59,11 +59,15 @@ import {
 } from "./franceStreamCuration";
 import { fetchDbStreamCurations, upsertStreamCuration } from "./channelCurationSupabase";
 import {
-  deletePackageCoverOverride,
+  clearPackageCoverImageKeepingThemes,
   fetchDbPackageCoverOverrides,
   upsertPackageCoverOverride,
+  upsertPackageCoverThemeOnly,
+  type PackageCoverOverrideEntry,
+  type PackageThemeColumns,
 } from "./packageCoverOverridesSupabase";
 import {
+  extractPresetFromImageUrl,
   extractPresetFromImageUrlCached,
   invalidatePackageImageThemeCache,
 } from "./packageImageTheme";
@@ -150,6 +154,12 @@ const elPceClear = document.getElementById("pce-clear") as HTMLButtonElement | n
 const elPceCancel = document.getElementById("pce-cancel") as HTMLButtonElement | null;
 const elPceSubmit = document.getElementById("pce-submit") as HTMLButtonElement | null;
 const elPceStatus = document.getElementById("pce-status") as HTMLParagraphElement | null;
+const elPceThemeBg = document.getElementById("pce-theme-bg") as HTMLInputElement | null;
+const elPceThemeSurface = document.getElementById("pce-theme-surface") as HTMLInputElement | null;
+const elPceThemePrimary = document.getElementById("pce-theme-primary") as HTMLInputElement | null;
+const elPceThemeGlow = document.getElementById("pce-theme-glow") as HTMLInputElement | null;
+const elPceThemeBack = document.getElementById("pce-theme-back") as HTMLInputElement | null;
+const elPceThemeReset = document.getElementById("pce-theme-reset") as HTMLButtonElement | null;
 
 /** `URL.createObjectURL` for cover previews — revoked when clearing or replacing. */
 let pceCoverPreviewObjectUrl: string | null = null;
@@ -212,8 +222,8 @@ let dbAdminCountries: AdminCountry[] = [];
 let dbAdminPackages: AdminPackage[] = [];
 /** Supabase `country_id` → `stream_id` → `target_package_id` (or `hidden`). */
 let streamCurationByCountry: Map<string, Map<number, string>> = new Map();
-/** `package_id` (fournisseur ou velagg:…) → `cover_url` pour images hors `admin_packages`. */
-let packageCoverOverrides: Map<string, string> = new Map();
+/** `package_id` (fournisseur ou velagg:…) → image + couleurs hors `admin_packages`. */
+let packageCoverOverrideById: Map<string, PackageCoverOverrideEntry> = new Map();
 
 const COUNTRY_STORAGE_KEY = "lumina_selected_country_id";
 /** When `"0"`, hide + / Supabase delete in the grid (admin session only). Default = visible. */
@@ -321,7 +331,7 @@ function resolveHeroImageUrlForTheme(pkg: AdminPackage): string | null {
     if (u && /^https?:\/\//i.test(u)) return u;
     return null;
   }
-  const o = packageCoverOverrides.get(id)?.trim();
+  const o = packageCoverOverrideById.get(id)?.cover_url?.trim();
   if (o && /^https?:\/\//i.test(o)) return o;
   const list = streamsForPackageCoverFallback(id);
   const ch = list.map((s) => resolvedIconUrl(s.stream_icon, st.base)).find(Boolean);
@@ -2001,7 +2011,7 @@ async function refreshSupabaseHierarchy(): Promise<void> {
     dbAdminCountries = [];
     dbAdminPackages = [];
     streamCurationByCountry = new Map();
-    packageCoverOverrides = new Map();
+    packageCoverOverrideById = new Map();
     populateCountrySelectFromAdmin();
     return;
   }
@@ -2015,15 +2025,15 @@ async function refreshSupabaseHierarchy(): Promise<void> {
       streamCurationByCountry = new Map();
     }
     try {
-      packageCoverOverrides = await fetchDbPackageCoverOverrides(sb);
+      packageCoverOverrideById = await fetchDbPackageCoverOverrides(sb);
     } catch {
-      packageCoverOverrides = new Map();
+      packageCoverOverrideById = new Map();
     }
   } catch {
     dbAdminCountries = [];
     dbAdminPackages = [];
     streamCurationByCountry = new Map();
-    packageCoverOverrides = new Map();
+    packageCoverOverrideById = new Map();
   }
   populateCountrySelectFromAdmin();
 }
@@ -2097,22 +2107,164 @@ function mergedPackagesForGrid(): AdminPackage[] {
   return base.sort((a, b) => a.name.localeCompare(b.name, "fr"));
 }
 
+type PackageThemeKey = "theme_bg" | "theme_surface" | "theme_primary" | "theme_glow" | "theme_back";
+
+function mergePackageCoverThemeFromCatalogOverride(base: AdminPackage): AdminPackage {
+  if (isLikelyUuid(base.id) && dbAdminPackages.some((p) => p.id === base.id)) {
+    return base;
+  }
+  const ov = packageCoverOverrideById.get(base.id);
+  if (!ov) return base;
+  const overlay = (k: PackageThemeKey): string | undefined => {
+    const v = ov[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    const b = base[k];
+    return typeof b === "string" && b.trim() ? b.trim() : undefined;
+  };
+  return {
+    ...base,
+    theme_bg: overlay("theme_bg"),
+    theme_surface: overlay("theme_surface"),
+    theme_primary: overlay("theme_primary"),
+    theme_glow: overlay("theme_glow"),
+    theme_back: overlay("theme_back"),
+  };
+}
+
 function findPackageById(packageId: string): AdminPackage | undefined {
   if (uiTab === "live" && isSelectedCountryFrance() && selectedAdminCountryId) {
     const syn = FRANCE_SYNTH_PACKAGES.find((t) => t.id === packageId);
     if (syn) {
-      return { id: syn.id, country_id: selectedAdminCountryId, name: syn.name };
+      return mergePackageCoverThemeFromCatalogOverride({
+        id: syn.id,
+        country_id: selectedAdminCountryId,
+        name: syn.name,
+      });
     }
   }
-  return (
+  const base =
     providerLayoutForUiTab().packages.find((p) => p.id === packageId) ??
-    (uiTab === "live" ? dbAdminPackages.find((p) => p.id === packageId) : undefined)
-  );
+    (uiTab === "live" ? dbAdminPackages.find((p) => p.id === packageId) : undefined);
+  if (!base) return undefined;
+  return mergePackageCoverThemeFromCatalogOverride(base);
 }
 
 function httpsCatalogCoverOverride(packageId: string): string | null {
-  const u = packageCoverOverrides.get(packageId)?.trim();
+  const u = packageCoverOverrideById.get(packageId)?.cover_url?.trim();
   return u && /^https?:\/\//i.test(u) ? u : null;
+}
+
+function hexForVelColorInput(fallback: string, raw: string | null | undefined): string {
+  const t = (raw ?? "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(t)) return `#${t.slice(1).toLowerCase()}`;
+  if (/^#[0-9a-f]{3}$/i.test(t)) {
+    const r = t[1]!;
+    const g = t[2]!;
+    const b = t[3]!;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return fallback;
+}
+
+function readPackageThemeColumnsFromPceDialog(): PackageThemeColumns {
+  const hexOrNull = (el: HTMLInputElement | null): string | null => {
+    const t = el?.value.trim() ?? "";
+    return t.length ? t : null;
+  };
+  const glow = elPceThemeGlow?.value.trim() ?? "";
+  const back = elPceThemeBack?.value.trim() ?? "";
+  return {
+    theme_bg: hexOrNull(elPceThemeBg),
+    theme_surface: hexOrNull(elPceThemeSurface),
+    theme_primary: hexOrNull(elPceThemePrimary),
+    theme_glow: glow.length ? glow : null,
+    theme_back: back.length ? back : null,
+  };
+}
+
+function normalizeHexCss(a: string | null | undefined): string {
+  const t = (a ?? "").trim().toLowerCase();
+  if (/^#[0-9a-f]{3}$/.test(t)) {
+    const r = t[1]!;
+    const g = t[2]!;
+    const b = t[3]!;
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return t;
+}
+
+/** Treats colours matching the name-based preset as « unset » so image-based theming still applies. */
+function readPackageThemeColumnsFromPceDialogNormalized(packageName: string): PackageThemeColumns {
+  const pr = presetForPackageName(packageName);
+  const raw = readPackageThemeColumnsFromPceDialog();
+  const eqHex = (x: string | null, y: string) =>
+    x != null && y.length > 0 && normalizeHexCss(x) === normalizeHexCss(y);
+  const glowNorm = (s: string) => s.replace(/\s+/g, " ").trim();
+  const eqGlow = (x: string | null, y: string) =>
+    x != null && glowNorm(x) === glowNorm(y);
+  return {
+    theme_bg: eqHex(raw.theme_bg, pr.bg) ? null : raw.theme_bg,
+    theme_surface: eqHex(raw.theme_surface, pr.surface) ? null : raw.theme_surface,
+    theme_primary: eqHex(raw.theme_primary, pr.primary) ? null : raw.theme_primary,
+    theme_glow: eqGlow(raw.theme_glow, pr.glow) ? null : raw.theme_glow,
+    theme_back: (raw.theme_back ?? "").trim().length ? raw.theme_back : null,
+  };
+}
+
+function mergeThemeIntoOverrideEntry(
+  prev: PackageCoverOverrideEntry | null | undefined,
+  dialog: PackageThemeColumns
+): PackageCoverOverrideEntry {
+  return {
+    cover_url: prev?.cover_url ?? null,
+    theme_bg: dialog.theme_bg,
+    theme_surface: dialog.theme_surface,
+    theme_primary: dialog.theme_primary,
+    theme_glow: dialog.theme_glow,
+    theme_back: dialog.theme_back,
+  };
+}
+
+function fillPackageThemeDialogFromPackage(pkg: AdminPackage): void {
+  const pr = presetForPackageName(pkg.name);
+  if (elPceThemeBg) elPceThemeBg.value = hexForVelColorInput(pr.bg, pkg.theme_bg);
+  if (elPceThemeSurface) elPceThemeSurface.value = hexForVelColorInput(pr.surface, pkg.theme_surface);
+  if (elPceThemePrimary) elPceThemePrimary.value = hexForVelColorInput(pr.primary, pkg.theme_primary);
+  if (elPceThemeGlow) elPceThemeGlow.value = (pkg.theme_glow ?? "").trim() || pr.glow;
+  if (elPceThemeBack) elPceThemeBack.value = (pkg.theme_back ?? "").trim();
+}
+
+async function fillPackageThemeDialogFromImageFile(file: File): Promise<void> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const t = await extractPresetFromImageUrl(objectUrl);
+    if (!t) return;
+    if (elPceThemeBg) elPceThemeBg.value = hexForVelColorInput(t.bg, t.bg);
+    if (elPceThemeSurface) elPceThemeSurface.value = hexForVelColorInput(t.surface, t.surface);
+    if (elPceThemePrimary) elPceThemePrimary.value = hexForVelColorInput(t.primary, t.primary);
+    if (elPceThemeGlow) elPceThemeGlow.value = t.glow;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function persistPackageThemeColumns(
+  packageId: string,
+  themes: PackageThemeColumns
+): Promise<string | null> {
+  const sb = getSupabaseClient();
+  if (!sb) return "Supabase indisponible.";
+  if (isLikelyUuid(packageId)) {
+    const { error } = await sb.from("admin_packages").update({ ...themes }).eq("id", packageId);
+    return error?.message ?? null;
+  }
+  const res = await upsertPackageCoverThemeOnly(
+    sb,
+    packageId,
+    themes,
+    packageCoverOverrideById.get(packageId)
+  );
+  return res.error ?? null;
 }
 
 /** See `imageUrlForDisplay` (R2 `*.r2.dev` = direct; other HTTPS = `/proxy`). */
@@ -2213,11 +2365,11 @@ function renderPackagesGrid(): void {
         const edit = document.createElement("button");
         edit.type = "button";
         edit.className = "admin-pkg-edit-sb";
-        edit.setAttribute("aria-label", `Image — ${pkg.name}`);
+        edit.setAttribute("aria-label", `Image et couleurs — ${pkg.name}`);
         edit.title =
           uiTab === "live"
-            ? "Modifier l’image du bouquet"
-            : "Modifier l’image de la catégorie (affiche + thème)";
+            ? "Modifier l’image et les couleurs du bouquet"
+            : "Modifier l’image et les couleurs (affiche + thème)";
         edit.textContent = "🖼";
         edit.addEventListener("click", (ev) => {
           ev.preventDefault();
@@ -2335,11 +2487,11 @@ function renderPackagesGrid(): void {
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "admin-pkg-edit-sb";
-      edit.setAttribute("aria-label", `Image — ${pkg.name}`);
+      edit.setAttribute("aria-label", `Image et couleurs — ${pkg.name}`);
       edit.title =
         uiTab === "live"
-          ? "Modifier l’image du bouquet"
-          : "Modifier l’image de la catégorie (affiche + thème)";
+          ? "Modifier l’image et les couleurs du bouquet"
+          : "Modifier l’image et les couleurs (affiche + thème)";
       edit.textContent = "🖼";
       edit.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -2657,7 +2809,8 @@ function syncCoverUploadVisual(side: "pce" | "dap"): void {
 async function assignCoverAfterCrop(
   input: HTMLInputElement | null,
   sync: () => void,
-  file: File
+  file: File,
+  afterAssign?: (assigned: File) => Promise<void>
 ): Promise<void> {
   if (!input) return;
   const cropped = await runCoverSquareCrop(file);
@@ -2670,6 +2823,7 @@ async function assignCoverAfterCrop(
   dt.items.add(cropped);
   input.files = dt.files;
   sync();
+  await afterAssign?.(cropped);
 }
 
 function wirePackageCoverDropZone(
@@ -2705,6 +2859,9 @@ function wirePackageCoverDropZone(
 (function wireCoverUploadControls(): void {
   const syncPce = (): void => syncCoverUploadVisual("pce");
   const syncDap = (): void => syncCoverUploadVisual("dap");
+  const afterPceAssign = async (assigned: File): Promise<void> => {
+    await fillPackageThemeDialogFromImageFile(assigned);
+  };
   elPceCoverPick?.addEventListener("click", () => elPceCover?.click());
   elDapCoverPick?.addEventListener("click", () => elDapCover?.click());
   elPceCover?.addEventListener("change", () => {
@@ -2713,7 +2870,7 @@ function wirePackageCoverDropZone(
       syncPce();
       return;
     }
-    void assignCoverAfterCrop(elPceCover, syncPce, f);
+    void assignCoverAfterCrop(elPceCover, syncPce, f, afterPceAssign);
   });
   elDapCover?.addEventListener("change", () => {
     const f = elDapCover?.files?.[0];
@@ -2723,7 +2880,9 @@ function wirePackageCoverDropZone(
     }
     void assignCoverAfterCrop(elDapCover, syncDap, f);
   });
-  wirePackageCoverDropZone(elPceDropzone, elPceCover, syncPce, assignCoverAfterCrop);
+  wirePackageCoverDropZone(elPceDropzone, elPceCover, syncPce, (i, s, f) =>
+    assignCoverAfterCrop(i, s, f, afterPceAssign)
+  );
   wirePackageCoverDropZone(elDapDropzone, elDapCover, syncDap, assignCoverAfterCrop);
 })();
 
@@ -2731,10 +2890,12 @@ function openPackageCoverEditDialog(pkg: AdminPackage): void {
   if (!elDialogPackageCover || !elPcePackageId || !elPceCover) return;
   const sb = getSupabaseClient();
   if (!isAdminSession() || !readAdminGridToolsEnabled() || !sb) return;
-  elPcePackageId.value = pkg.id;
-  if (elPcePackageName) elPcePackageName.textContent = pkg.name;
+  const merged = findPackageById(pkg.id) ?? pkg;
+  elPcePackageId.value = merged.id;
+  if (elPcePackageName) elPcePackageName.textContent = merged.name;
   elPceCover.value = "";
   syncCoverUploadVisual("pce");
+  fillPackageThemeDialogFromPackage(merged);
   elPceStatus && (elPceStatus.textContent = "");
   elPceStatus?.classList.remove("error");
   elDialogPackageCover.showModal();
@@ -2766,7 +2927,11 @@ elPceClear?.addEventListener("click", () => {
           return;
         }
       } else {
-        const res = await deletePackageCoverOverride(sb, id);
+        const res = await clearPackageCoverImageKeepingThemes(
+          sb,
+          id,
+          packageCoverOverrideById.get(id)
+        );
         if (res.error) {
           elPceStatus && (elPceStatus.textContent = res.error);
           elPceStatus?.classList.add("error");
@@ -2786,6 +2951,42 @@ elPceClear?.addEventListener("click", () => {
   })();
 });
 
+elPceThemeReset?.addEventListener("click", () => {
+  void (async () => {
+    const id = elPcePackageId?.value.trim();
+    const sb = getSupabaseClient();
+    if (!id || !sb) return;
+    elPceStatus && (elPceStatus.textContent = "");
+    elPceStatus?.classList.remove("error");
+    const cleared: PackageThemeColumns = {
+      theme_bg: null,
+      theme_surface: null,
+      theme_primary: null,
+      theme_glow: null,
+      theme_back: null,
+    };
+    elPceThemeReset.disabled = true;
+    try {
+      const msg = await persistPackageThemeColumns(id, cleared);
+      if (msg) {
+        elPceStatus && (elPceStatus.textContent = msg);
+        elPceStatus?.classList.add("error");
+        return;
+      }
+      invalidatePackageImageThemeCache(id);
+      await refreshSupabaseHierarchy();
+      const merged = findPackageById(id);
+      if (merged) fillPackageThemeDialogFromPackage(merged);
+      if (state && uiShell === "packages" && isPackagesGridTab()) renderPackagesGrid();
+      if (state && uiShell === "content" && uiAdminPackageId === id && isPackagesGridTab()) {
+        applyThemeForPackage(findPackageById(id) ?? null);
+      }
+    } finally {
+      elPceThemeReset.disabled = false;
+    }
+  })();
+});
+
 elPceSubmit?.addEventListener("click", () => {
   void (async () => {
     const id = elPcePackageId?.value.trim();
@@ -2794,43 +2995,57 @@ elPceSubmit?.addEventListener("click", () => {
     const file = elPceCover.files?.[0];
     elPceStatus && (elPceStatus.textContent = "");
     elPceStatus?.classList.remove("error");
-    if (!file) {
-      elPceStatus && (elPceStatus.textContent = "Choisissez une image ou utilisez « Retirer l’image ».");
-      elPceStatus?.classList.add("error");
-      return;
-    }
+    const pkgName = findPackageById(id)?.name ?? elPcePackageName?.textContent?.trim() ?? "";
+    const themes = readPackageThemeColumnsFromPceDialogNormalized(pkgName);
+    const prevOv = packageCoverOverrideById.get(id);
 
     elPceSubmit.disabled = true;
     try {
-      const up = await uploadPackageCoverFile(sb, id, file);
-      if ("error" in up) {
-        elPceStatus && (elPceStatus.textContent = up.error);
-        elPceStatus?.classList.add("error");
-        return;
-      }
-      const finalUrl = up.url;
-
-      if (isLikelyUuid(id)) {
-        const { error } = await sb.from("admin_packages").update({ cover_url: finalUrl }).eq("id", id);
-        if (error) {
-          elPceStatus && (elPceStatus.textContent = error.message);
+      if (file) {
+        const up = await uploadPackageCoverFile(sb, id, file);
+        if ("error" in up) {
+          elPceStatus && (elPceStatus.textContent = up.error);
           elPceStatus?.classList.add("error");
           return;
+        }
+        const finalUrl = up.url;
+
+        if (isLikelyUuid(id)) {
+          const { error } = await sb
+            .from("admin_packages")
+            .update({ cover_url: finalUrl, ...themes })
+            .eq("id", id);
+          if (error) {
+            elPceStatus && (elPceStatus.textContent = error.message);
+            elPceStatus?.classList.add("error");
+            return;
+          }
+        } else {
+          const res = await upsertPackageCoverOverride(
+            sb,
+            id,
+            finalUrl,
+            mergeThemeIntoOverrideEntry(prevOv, themes)
+          );
+          if (res.error) {
+            elPceStatus && (elPceStatus.textContent = res.error);
+            elPceStatus?.classList.add("error");
+            return;
+          }
         }
       } else {
-        const res = await upsertPackageCoverOverride(sb, id, finalUrl);
-        if (res.error) {
-          elPceStatus && (elPceStatus.textContent = res.error);
+        const msg = await persistPackageThemeColumns(id, themes);
+        if (msg) {
+          elPceStatus && (elPceStatus.textContent = msg);
           elPceStatus?.classList.add("error");
           return;
         }
       }
 
-      if (isPackageCoverDebugEnabled()) {
+      if (isPackageCoverDebugEnabled() && file) {
         console.log("[package-cover] saved to Supabase", {
           packageId: id,
           row: isLikelyUuid(id) ? "admin_packages.cover_url" : "admin_package_covers",
-          finalUrl,
         });
       }
 
@@ -2838,7 +3053,7 @@ elPceSubmit?.addEventListener("click", () => {
       await refreshSupabaseHierarchy();
       if (isPackageCoverDebugEnabled()) {
         const row = dbAdminPackages.find((p) => p.id === id);
-        const ov = packageCoverOverrides.get(id)?.trim();
+        const ov = packageCoverOverrideById.get(id)?.cover_url?.trim();
         console.log("[package-cover] after refreshSupabaseHierarchy", {
           packageId: id,
           cover_urlFromFetch: row?.cover_url ?? "(no admin_packages row)",
@@ -3441,7 +3656,7 @@ function disconnect(): void {
   dbAdminCountries = [];
   dbAdminPackages = [];
   streamCurationByCountry = new Map();
-  packageCoverOverrides = new Map();
+  packageCoverOverrideById = new Map();
   populateCountrySelectFromAdmin();
   state = null;
   activeStreamId = null;

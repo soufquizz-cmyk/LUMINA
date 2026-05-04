@@ -2028,6 +2028,7 @@ a.topbar__admin-link {
 }
 
 .player-container--vod {
+  margin-bottom: clamp(0.85rem, 2.5vw, 1.35rem);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.07) inset,
     0 4px 12px rgba(0, 0, 0, 0.35),
@@ -2484,11 +2485,21 @@ a.topbar__admin-link {
   background: rgba(18, 16, 28, 0.25);
 }
 
-/* Live TV only : timeline / durées sans sens sur HLS non borné (Chromium, Safari, Edge). */
+/* Live TV only : pas de scrubber / durées (HLS non borné — Chromium, Safari, Edge). */
+.player-container--live-tv video::-webkit-media-controls-timeline-container,
 .player-container--live-tv video::-webkit-media-controls-timeline,
 .player-container--live-tv video::-webkit-media-controls-current-time-display,
 .player-container--live-tv video::-webkit-media-controls-time-remaining-display {
   display: none !important;
+  flex: 0 0 0 !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 .vel-body {
@@ -2674,6 +2685,8 @@ a.topbar__admin-link {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Évite la bande horizontale (fond --bg) sous la fiche : .vel-body a sinon padding-bottom: 2rem */
+  padding-bottom: 0;
 }
 
 #content-view.content-view--vod-film-detail .vel-content-toolbar {
@@ -2690,7 +2703,8 @@ a.topbar__admin-link {
   max-width: none;
   margin: 0;
   padding: 0;
-  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  /* Marge basse gérée par .vel-vod-detail__inner ; ici seulement encoche iPhone */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;

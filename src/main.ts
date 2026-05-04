@@ -512,10 +512,13 @@ function playUrl(
   setPlayerBufferingVisible(false);
   const proxied = proxiedUrl(url);
   elNowPlaying.innerHTML = nowPlayingLiveMarkup(label);
-  showPlayerChrome(true);
+  /* Classe live avant d’afficher le shell : sinon une frame affiche la barre de progression native. */
   if (hideNativeProgressBar) {
     elPlayerContainer.classList.add("player-container--live-tv");
+  } else {
+    elPlayerContainer.classList.remove("player-container--live-tv");
   }
+  showPlayerChrome(true);
 
   const hasUpstreamAuth = Boolean(
     upstreamAuth &&
@@ -2958,6 +2961,14 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
         }
         return;
       }
+      // Liste / autre navigation pendant l’await : ne pas relancer le lecteur.
+      if (
+        vodMovieUiPhase !== "detail" ||
+        vodDetailStream == null ||
+        vodDetailStream.stream_id !== s.stream_id
+      ) {
+        return;
+      }
       s.direct_source = resolved;
       playVodUrl(resolved, displayChannelName(s.name), state.nodecastAuthHeaders);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2965,23 +2976,23 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
     }
 
     teardownPlaybackMedia();
+    if (hideLiveProgress) {
+      elPlayerContainer.classList.add("player-container--live-tv");
+    } else {
+      elPlayerContainer.classList.remove("player-container--live-tv");
+    }
     showPlayerChrome(true);
-    setPlayerBufferingVisible(true);
     elNowPlaying.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
     let resolved: string | null = null;
-    try {
-      if (s.nodecast_media === "series" && s.nodecast_source_id) {
-        resolved = await resolveNodecastSeriesPlayableUrl(
-          state.base,
-          s.stream_id,
-          s.nodecast_source_id,
-          state.nodecastAuthHeaders
-        );
-      } else {
-        resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
-      }
-    } finally {
-      setPlayerBufferingVisible(false);
+    if (s.nodecast_media === "series" && s.nodecast_source_id) {
+      resolved = await resolveNodecastSeriesPlayableUrl(
+        state.base,
+        s.stream_id,
+        s.nodecast_source_id,
+        state.nodecastAuthHeaders
+      );
+    } else {
+      resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
     }
     if (!resolved) {
       elNowPlaying.innerHTML = nowPlayingErrorMarkup(
@@ -2996,6 +3007,15 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
         "URL de lecture externe bloquée ; proxy requis."
       );
       return;
+    }
+    if (s.nodecast_media === "series") {
+      if (
+        seriesUiPhase !== "detail" ||
+        seriesDetailStream == null ||
+        seriesDetailStream.stream_id !== s.stream_id
+      ) {
+        return;
+      }
     }
     s.direct_source = resolved;
     playUrl(resolved, displayChannelName(s.name), state.nodecastAuthHeaders, hideLiveProgress);
@@ -3187,16 +3207,14 @@ elBtnBackHome.addEventListener("click", () => {
   if (uiTab === "movies" && vodMovieUiPhase === "detail" && uiShell === "content") {
     vodMovieUiPhase = "list";
     vodDetailStream = null;
-    destroyVodPlayer();
-    if (state && uiAdminPackageId != null) renderPackageChannelList();
+    closeVodPlayerUserAction();
     syncCatalogBackButtonLabel();
     return;
   }
   if (uiTab === "series" && seriesUiPhase === "detail" && uiShell === "content") {
     seriesUiPhase = "list";
     seriesDetailStream = null;
-    destroyPlayer();
-    if (state && uiAdminPackageId != null) renderPackageChannelList();
+    closePlayerUserAction();
     syncCatalogBackButtonLabel();
     return;
   }

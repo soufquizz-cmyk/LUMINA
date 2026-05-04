@@ -2428,7 +2428,8 @@ a.topbar__admin-link {
 .vel-vod-detail__season-select:focus {
   outline: none;
   border-color: rgba(167, 139, 250, 0.55);
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.22);
+  border-color: color-mix(in srgb, var(--vel-primary, #8a2be2) 65%, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vel-primary, #8a2be2) 28%, transparent);
   background-color: #1c1828;
   color: #f5f3ff;
 }
@@ -2470,7 +2471,6 @@ a.topbar__admin-link {
   background: rgba(139, 92, 246, 0.2);
   background: color-mix(in srgb, var(--vel-primary, #8a2be2) 17%, rgba(255, 255, 255, 0.06));
   box-shadow:
-    0 0 0 1px rgba(167, 139, 250, 0.28),
     0 0 0 1px color-mix(in srgb, var(--vel-primary, #8a2be2) 42%, transparent),
     0 8px 26px rgba(0, 0, 0, 0.32),
     0 0 32px var(--vel-accent-glow, rgba(138, 43, 226, 0.22));
@@ -3184,6 +3184,40 @@ a.topbar__admin-link {
   filter: brightness(0.92);
 }
 
+/* Retour + Regarder (fiche film/série) : couleurs du thème bouquet (.main--velora). */
+.main--velora .back-btn {
+  color: color-mix(in srgb, var(--vel-text, #ffffff) 72%, var(--vel-primary, #8a2be2));
+}
+
+.main--velora .back-btn__icon {
+  color: var(--vel-primary, #8a2be2);
+}
+
+.main--velora .back-btn:hover {
+  color: var(--vel-text, #ffffff);
+}
+
+.main--velora .back-btn:hover .back-btn__icon {
+  color: color-mix(in srgb, var(--vel-primary, #8a2be2) 88%, white);
+}
+
+.main--velora .vel-vod-detail__watch.primary {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--vel-primary, #8a2be2) 88%, #05030a),
+    color-mix(in srgb, var(--vel-primary, #8a2be2) 58%, #0a0814)
+  );
+  border: 1px solid color-mix(in srgb, var(--vel-primary, #8a2be2) 52%, rgba(0, 0, 0, 0.45));
+  color: var(--vel-text, #ffffff);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.38),
+    0 0 26px var(--vel-accent-glow, rgba(138, 43, 226, 0.28));
+}
+
+.main--velora .vel-vod-detail__watch.primary:hover {
+  filter: brightness(1.08);
+}
+
 .vel-cat-pills-wrap {
   display: block;
   width: 100%;
@@ -3233,7 +3267,9 @@ a.topbar__admin-link {
 
 .vel-pills .cat-pill.active {
   border-color: rgba(138, 43, 226, 0.55);
+  border-color: color-mix(in srgb, var(--vel-primary, #8a2be2) 55%, rgba(255, 255, 255, 0.2));
   color: rgba(245, 240, 255, 0.98);
+  color: color-mix(in srgb, var(--vel-text, #ffffff) 96%, var(--vel-primary, #8a2be2));
   font-weight: 600;
   box-shadow: none;
 }
@@ -3292,7 +3328,13 @@ a.topbar__admin-link {
   box-shadow:
     0 0 0 1px rgba(138, 43, 226, 0.25),
     0 4px 14px rgba(0, 0, 0, 0.32),
-    0 0 20px var(--vel-accent-glow);
+    0 0 22px var(--vel-accent-glow);
+  border-color: color-mix(in srgb, var(--vel-primary, #8a2be2) 52%, rgba(255, 255, 255, 0.22));
+  background: color-mix(in srgb, var(--vel-primary, #8a2be2) 9%, rgba(255, 255, 255, 0.04));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--vel-primary, #8a2be2) 34%, transparent),
+    0 4px 14px rgba(0, 0, 0, 0.32),
+    0 0 22px var(--vel-accent-glow);
 }
 
 .media-item__thumb {
@@ -3348,6 +3390,10 @@ a.topbar__admin-link {
   text-shadow: 0 1px 14px rgba(138, 43, 226, 0.08);
 }
 
+.main--velora .media-info h4 {
+  text-shadow: 0 1px 14px color-mix(in srgb, var(--vel-primary, #8a2be2) 10%, transparent);
+}
+
 @supports (-webkit-background-clip: text) or (background-clip: text) {
   .main--velora .media-item .media-info h4 {
     background: linear-gradient(
@@ -3366,9 +3412,9 @@ a.topbar__admin-link {
   .main--velora .media-item.selected .media-info h4 {
     background: linear-gradient(
       102deg,
-      rgba(248, 244, 255, 1) 0%,
-      rgba(220, 200, 255, 0.95) 50%,
-      rgba(235, 225, 255, 1) 100%
+      color-mix(in srgb, var(--vel-text, #ffffff) 97%, var(--vel-primary, #8a2be2)) 0%,
+      color-mix(in srgb, var(--vel-primary, #8a2be2) 22%, rgba(248, 244, 255, 1)) 50%,
+      color-mix(in srgb, var(--vel-text, #ffffff) 96%, var(--vel-primary, #8a2be2)) 100%
     );
     -webkit-background-clip: text;
     background-clip: text;
@@ -3406,11 +3452,11 @@ a.topbar__admin-link {
     background-clip: unset !important;
     color: rgba(236, 232, 252, 0.98) !important;
     -webkit-text-fill-color: unset !important;
-    text-shadow: 0 1px 10px rgba(138, 43, 226, 0.1);
+    text-shadow: 0 1px 10px color-mix(in srgb, var(--vel-primary, #8a2be2) 14%, transparent);
   }
 
   .main--velora .media-item.selected .media-info h4 {
-    color: rgba(248, 244, 255, 1) !important;
+    color: var(--vel-text, rgba(248, 244, 255, 1)) !important;
   }
 
   .media-info p {

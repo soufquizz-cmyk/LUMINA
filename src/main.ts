@@ -371,6 +371,11 @@ function setTabsActive(tab: UiTab): void {
   elTabSeries.classList.toggle("active", tab === "series");
 }
 
+/** Marque le shell « dans un bouquet » : le logo VIP suit le thème du package sur `.main`. */
+function syncMainInPackageClass(): void {
+  elMain.classList.toggle("main--velora-in-package", uiShell === "content" && uiAdminPackageId != null);
+}
+
 /** × sur le lecteur : visible seulement sur la grille bouquets (hors package), lecteur affiché. */
 function syncPlayerDismissOverlay(): void {
   const onPackagesGrid = uiShell === "packages";
@@ -2445,6 +2450,7 @@ function openAdminPackage(packageId: string): void {
   syncCatalogBackButtonLabel();
   syncAdminAddChannelsButton();
   syncPlayerDismissOverlay();
+  syncMainInPackageClass();
 }
 
 /** Grille bouquets : conserve l’onglet (Live / Films / Séries). */
@@ -2470,6 +2476,7 @@ function showPackagesShell(): void {
   if (state) renderPackagesGrid();
   syncCatalogBackButtonLabel();
   syncPlayerDismissOverlay();
+  syncMainInPackageClass();
 }
 
 function goLiveHome(): void {
@@ -3103,6 +3110,7 @@ function showVodPlaceholder(
         : "Les <strong>séries</strong> sont disponibles après connexion <strong>Nodecast</strong> avec un proxy Xtream (<code>series_categories</code> / <code>get_series</code>).";
   }
   elDynamicList.appendChild(msg);
+  syncMainInPackageClass();
 }
 
 function openNodecastMediaShell(tab: "movies" | "series"): void {
@@ -3190,6 +3198,7 @@ async function openNodecastMediaShellAsync(tab: "movies" | "series"): Promise<vo
   renderPackagesGrid();
   syncAdminAddChannelsButton();
   syncPlayerDismissOverlay();
+  syncMainInPackageClass();
 }
 
 function onTabClick(tab: UiTab): void {
@@ -3458,6 +3467,7 @@ function disconnect(): void {
   elCatPillsWrap.classList.add("hidden");
   setTabsActive("live");
   applyPresetTheme("default");
+  syncMainInPackageClass();
   if (envAutoConnectConfigured()) {
     applyNodecastEnvDefaults();
     prepareEnvAutoconnectUi();

@@ -2035,6 +2035,28 @@ a.topbar__admin-link {
     0 0 24px rgba(245, 158, 11, 0.38);
 }
 
+/* Dans un bouquet : V / I / P héritent du thème (--vel-primary / --vel-accent-glow sur #main). */
+.main--velora-in-package .vel-brand-vip__v {
+  color: color-mix(in srgb, var(--vel-primary) 82%, white 18%);
+  text-shadow:
+    0 0 10px color-mix(in srgb, var(--vel-accent-glow) 92%, transparent),
+    0 0 26px color-mix(in srgb, var(--vel-accent-glow) 48%, transparent);
+}
+
+.main--velora-in-package .vel-brand-vip__i {
+  color: var(--vel-primary);
+  text-shadow:
+    0 0 10px color-mix(in srgb, var(--vel-accent-glow) 90%, transparent),
+    0 0 26px color-mix(in srgb, var(--vel-accent-glow) 52%, transparent);
+}
+
+.main--velora-in-package .vel-brand-vip__p {
+  color: color-mix(in srgb, var(--vel-primary) 78%, black 22%);
+  text-shadow:
+    0 0 10px color-mix(in srgb, var(--vel-accent-glow) 88%, transparent),
+    0 0 26px color-mix(in srgb, var(--vel-accent-glow) 45%, transparent);
+}
+
 .vel-header__right {
   display: flex;
   align-items: center;

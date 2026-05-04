@@ -1089,6 +1089,45 @@ function renderCatalogPosterGrid(streams: LiveStream[], tab: CatalogMediaTab): v
   }
 }
 
+const VOD_HERO_GRAD_BACKDROP = `linear-gradient(180deg, rgba(6,4,12,0.06) 0%, rgba(6,4,12,0.1) 32%, rgba(6,4,12,0.45) 58%, rgba(6,4,12,0.88) 82%, rgba(6,4,12,0.97) 100%)`;
+const VOD_HERO_GRAD_POSTER = `linear-gradient(180deg, rgba(6,4,12,0.35) 0%, rgba(6,4,12,0.95) 100%)`;
+
+/** Précharge le visuel puis l’affiche (évite l’affiche carte → swap backdrop). */
+function preloadVodDetailHeroBackground(
+  bg: HTMLDivElement,
+  primaryUrl: string,
+  gradient: string,
+  fallbackUrl: string | null,
+  isStill: () => boolean
+): void {
+  const apply = (url: string, grad: string) => {
+    if (!isStill()) return;
+    bg.classList.remove("vel-vod-detail__bg--loading");
+    bg.classList.remove("vel-vod-detail__bg--entered");
+    bg.style.backgroundImage = `${grad}, url("${url}")`;
+    void bg.offsetWidth;
+    bg.classList.add("vel-vod-detail__bg--entered");
+  };
+
+  const attempt = (url: string, grad: string, allowIconFallback: boolean) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => apply(url, grad);
+    img.onerror = () => {
+      if (!isStill()) return;
+      if (allowIconFallback && fallbackUrl && url !== fallbackUrl) {
+        attempt(fallbackUrl, VOD_HERO_GRAD_BACKDROP, false);
+        return;
+      }
+      bg.classList.remove("vel-vod-detail__bg--loading", "vel-vod-detail__bg--entered");
+      bg.style.backgroundImage = "";
+    };
+    img.src = url;
+  };
+
+  attempt(primaryUrl, gradient, Boolean(fallbackUrl));
+}
+
 function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void {
   if (!state) return;
   const st = state;
@@ -1101,10 +1140,7 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
   wrap.setAttribute("aria-label", streamTitle);
 
   const bg = document.createElement("div");
-  bg.className = "vel-vod-detail__bg";
-  if (iconHref) {
-    bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.2) 0%, rgba(6,4,12,0.85) 45%, rgba(6,4,12,0.98) 100%), url("${proxiedUrl(iconHref)}")`;
-  }
+  bg.className = "vel-vod-detail__bg vel-vod-detail__bg--loading";
 
   const inner = document.createElement("div");
   inner.className = "vel-vod-detail__inner";
@@ -1170,17 +1206,18 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
       : "Aucune description disponible pour cette série.";
 
   void (async () => {
+    const isStill = () =>
+      tab === "movies"
+        ? vodDetailStream?.stream_id === requestedId && uiTab === "movies"
+        : seriesDetailStream?.stream_id === requestedId && uiTab === "series";
+
     const info =
       sid && sid.length > 0
         ? tab === "movies"
           ? await fetchNodecastVodInfo(st.base, sid, requestedId, st.nodecastAuthHeaders, streamTitle)
           : await fetchNodecastSeriesInfo(st.base, sid, requestedId, st.nodecastAuthHeaders, streamTitle)
         : null;
-    const still =
-      tab === "movies"
-        ? vodDetailStream?.stream_id === requestedId && uiTab === "movies"
-        : seriesDetailStream?.stream_id === requestedId && uiTab === "series";
-    if (!state || !still) return;
+    if (!state || !isStill()) return;
 
     const displayTitle = (info?.title || streamTitle).trim() || streamTitle;
     titleEl.textContent = displayTitle;
@@ -1208,10 +1245,28 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
 
     const backdrop = info?.backdropUrl?.trim();
     const poster = info?.posterUrl?.trim();
+    const fallbackIcon = iconHref ? proxiedUrl(iconHref) : null;
     if (backdrop) {
-      bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.2) 0%, rgba(6,4,12,0.85) 45%, rgba(6,4,12,0.98) 100%), url("${imageUrlForDisplay(backdrop)}")`;
+      preloadVodDetailHeroBackground(
+        bg,
+        imageUrlForDisplay(backdrop),
+        VOD_HERO_GRAD_BACKDROP,
+        fallbackIcon,
+        isStill
+      );
     } else if (poster) {
-      bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.35) 0%, rgba(6,4,12,0.95) 100%), url("${imageUrlForDisplay(poster)}")`;
+      preloadVodDetailHeroBackground(
+        bg,
+        imageUrlForDisplay(poster),
+        VOD_HERO_GRAD_POSTER,
+        fallbackIcon,
+        isStill
+      );
+    } else if (fallbackIcon) {
+      preloadVodDetailHeroBackground(bg, fallbackIcon, VOD_HERO_GRAD_BACKDROP, null, isStill);
+    } else {
+      bg.classList.remove("vel-vod-detail__bg--loading", "vel-vod-detail__bg--entered");
+      bg.style.backgroundImage = "";
     }
   })();
 }

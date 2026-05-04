@@ -2238,21 +2238,76 @@ a.topbar__admin-link {
 .vel-vod-detail__bg {
   position: absolute;
   inset: 0;
+  z-index: 1;
+  background-color: #0c0b14;
   background-size: cover;
   background-position: center top;
   filter: saturate(1.05);
   transform: scale(1.02);
 }
 
+/* Fiche VOD : pas d’affiche carte puis swap — shimmer jusqu’au chargement du visuel API */
+.vel-vod-detail__bg.vel-vod-detail__bg--loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    118deg,
+    rgba(22, 20, 36, 0.92) 0%,
+    rgba(72, 58, 110, 0.28) 42%,
+    rgba(22, 20, 36, 0.94) 100%
+  );
+  background-size: 200% 100%;
+  animation: vel-vod-hero-shimmer 1.25s ease-in-out infinite;
+}
+
+.vel-vod-detail__bg.vel-vod-detail__bg--entered {
+  animation: vel-vod-hero-reveal 0.52s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes vel-vod-hero-shimmer {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 100% 0%;
+  }
+}
+
+@keyframes vel-vod-hero-reveal {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vel-vod-detail__bg.vel-vod-detail__bg--loading::after {
+    animation: none;
+    background-position: 50% 0%;
+  }
+
+  .vel-vod-detail__bg.vel-vod-detail__bg--entered {
+    animation: none;
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
 .vel-vod-detail__inner {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   padding: 2.25rem 1.35rem 2rem;
   background: linear-gradient(
     180deg,
-    rgba(8, 6, 14, 0.15) 0%,
-    rgba(8, 6, 14, 0.72) 28%,
-    rgba(6, 5, 12, 0.96) 55%,
+    rgba(8, 6, 14, 0.04) 0%,
+    rgba(8, 6, 14, 0.12) 38%,
+    rgba(8, 6, 14, 0.62) 68%,
+    rgba(6, 5, 12, 0.94) 92%,
     #06060a 100%
   );
 }
@@ -2654,11 +2709,19 @@ a.topbar__admin-link {
 
 #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__inner {
   min-height: calc(100dvh - 10.5rem);
-  padding: 1.75rem max(1.15rem, env(safe-area-inset-left)) max(2rem, env(safe-area-inset-bottom))
+  padding: clamp(5.5rem, 28vh, 13rem) max(1.15rem, env(safe-area-inset-left)) max(2rem, env(safe-area-inset-bottom))
     max(1.15rem, env(safe-area-inset-right));
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 6, 14, 0) 0%,
+    rgba(8, 6, 14, 0.06) min(42vh, 52%),
+    rgba(8, 6, 14, 0.55) 78%,
+    rgba(6, 5, 12, 0.94) 96%,
+    #06060a 100%
+  );
 }
 
 #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__title {

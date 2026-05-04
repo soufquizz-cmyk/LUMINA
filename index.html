@@ -228,6 +228,17 @@
             </button>
             <div class="video-wrapper">
               <video id="video" controls playsinline></video>
+              <div
+                id="player-buffering"
+                class="player-buffering hidden"
+                aria-hidden="true"
+                role="status"
+                aria-live="polite"
+                aria-label="Chargement de la lecture"
+              >
+                <div class="player-buffering__spinner" aria-hidden="true"></div>
+                <span class="player-buffering__label">Chargement…</span>
+              </div>
             </div>
           </div>
         </div>

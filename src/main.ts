@@ -87,6 +87,7 @@ const elLoginPanel = document.querySelector(".login-panel") as HTMLElement;
 const elCatPills = $("#cat-pills") as HTMLDivElement;
 const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
 const elVideo = $("#video") as HTMLVideoElement;
+const elPlayerBuffering = document.getElementById("player-buffering") as HTMLDivElement | null;
 const elNowPlaying = $("#now-playing") as HTMLDivElement;
 const elBtnLogout = $("#btn-logout") as HTMLButtonElement;
 const elBtnSettings = $("#btn-settings") as HTMLButtonElement | null;
@@ -377,17 +378,34 @@ function closePlayerUserAction(): void {
   }
 }
 
-function destroyPlayer(): void {
+function setPlayerBufferingVisible(visible: boolean): void {
+  if (!elPlayerBuffering) return;
+  elPlayerBuffering.classList.toggle("hidden", !visible);
+  elPlayerBuffering.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
+/** Stop HLS / native playback without hiding the player shell (used when switching stream). */
+function teardownPlaybackMedia(): void {
   if (hls) {
     hls.destroy();
     hls = null;
   }
   elVideo.onerror = null;
+  try {
+    elVideo.pause();
+  } catch {
+    /* ignore */
+  }
   elVideo.removeAttribute("src");
   elVideo.removeAttribute("title");
   elVideo.load();
-  elNowPlaying.textContent = "";
   elPlayerContainer.classList.remove("player-container--live-tv");
+}
+
+function destroyPlayer(): void {
+  teardownPlaybackMedia();
+  setPlayerBufferingVisible(false);
+  elNowPlaying.textContent = "";
   showPlayerChrome(false);
 }
 
@@ -416,7 +434,8 @@ function playUrl(
   /** Live HLS (direct Xtream / chaîne Nodecast) : masque la barre de progression native (flux non borné). */
   hideNativeProgressBar = false
 ): void {
-  destroyPlayer();
+  teardownPlaybackMedia();
+  setPlayerBufferingVisible(false);
   const proxied = proxiedUrl(url);
   elNowPlaying.innerHTML = nowPlayingLiveMarkup(label);
   showPlayerChrome(true);
@@ -2389,21 +2408,27 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
   if (!state) return;
   const hideLiveProgress =
     s.nodecast_media !== "vod" && s.nodecast_media !== "series";
+  teardownPlaybackMedia();
   if (state.mode === "nodecast") {
     showPlayerChrome(true);
+    setPlayerBufferingVisible(true);
     elNowPlaying.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
     let resolved: string | null = null;
-    if (s.nodecast_media === "series" && s.nodecast_source_id) {
-      resolved = await resolveNodecastSeriesPlayableUrl(
-        state.base,
-        s.stream_id,
-        s.nodecast_source_id,
-        state.nodecastAuthHeaders
-      );
-    } else if (s.nodecast_media === "vod") {
-      resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
-    } else {
-      resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
+    try {
+      if (s.nodecast_media === "series" && s.nodecast_source_id) {
+        resolved = await resolveNodecastSeriesPlayableUrl(
+          state.base,
+          s.stream_id,
+          s.nodecast_source_id,
+          state.nodecastAuthHeaders
+        );
+      } else if (s.nodecast_media === "vod") {
+        resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
+      } else {
+        resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
+      }
+    } finally {
+      setPlayerBufferingVisible(false);
     }
     if (!resolved) {
       elNowPlaying.innerHTML = nowPlayingErrorMarkup(

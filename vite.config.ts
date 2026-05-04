@@ -342,11 +342,35 @@ function proxyMiddleware() {
       return;
     }
 
+    const method = (req.method ?? "GET").toUpperCase();
     const debug = proxyDebugMode();
     const upstreamMsRaw = Number(process.env.XTREAM_PROXY_UPSTREAM_MS);
-    const upstreamMs = Number.isFinite(upstreamMsRaw)
+    let upstreamMs = Number.isFinite(upstreamMsRaw)
       ? Math.min(Math.max(upstreamMsRaw, 5_000), 900_000)
       : 120_000;
+    if (
+      method === "POST" &&
+      /\/api\/transcode\/session(?:\?|$)/i.test(q)
+    ) {
+      const capRaw = Number(process.env.XTREAM_PROXY_TRANSCODE_SESSION_MS);
+      const capMs = Number.isFinite(capRaw)
+        ? Math.min(Math.max(capRaw, 3_000), 120_000)
+        : 18_000;
+      upstreamMs = Math.min(upstreamMs, capMs);
+    } else if (
+      method === "GET" &&
+      /\/api\/proxy\/stream(?:\?|$)/i.test(q)
+    ) {
+      const ph = req.headers["x-playable-probe"];
+      const probeVal = Array.isArray(ph) ? ph[0] : ph;
+      if (typeof probeVal === "string" && probeVal.trim() === "1") {
+        const capRaw = Number(process.env.XTREAM_PROXY_STREAM_PROBE_MS);
+        const capMs = Number.isFinite(capRaw)
+          ? Math.min(Math.max(capRaw, 3_000), 120_000)
+          : 18_000;
+        upstreamMs = Math.min(upstreamMs, capMs);
+      }
+    }
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), upstreamMs);
     const { headers: outHeaders, referer, origin } = buildUpstreamHeaders(
@@ -368,7 +392,6 @@ function proxyMiddleware() {
     }
 
     try {
-      const method = (req.method ?? "GET").toUpperCase();
       let requestBody: Buffer | undefined;
       if (method !== "GET" && method !== "HEAD") {
         const chunks: Buffer[] = [];

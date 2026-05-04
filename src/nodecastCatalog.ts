@@ -27,6 +27,8 @@ export type ProxiedRequestInit = {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: string;
+  /** Abort fetch after this many ms (default 90s). Use ~15–25s for transcode session POST. */
+  timeoutMs?: number;
 };
 
 const PROXY_PREFIX = (import.meta.env.VITE_PROXY_PREFIX ?? "/proxy").replace(/\/$/, "");
@@ -62,6 +64,11 @@ export function imageUrlForDisplay(href: string): string {
 }
 
 const FETCH_TIMEOUT_MS = 90_000;
+/** POST /api/transcode/session should fail fast when the panel is broken (e.g. ENOENT on cache). */
+const TRANSCODE_SESSION_FETCH_MS = 18_000;
+const TRANSCODE_PROBE_WARM_FETCH_MS = 12_000;
+/** GET via `/proxy` to decide if a URL is playable — must not hang on stalled Nodecast/CDN streams. */
+const PLAYABLE_PROBE_FETCH_MS = 18_000;
 const TRANSCODE_CACHE_MS = 3 * 60 * 1000;
 const transcodePlaylistCache = new Map<string, { expires: number; playlistUrl: string }>();
 const transcodeInflight = new Map<string, Promise<string | null>>();
@@ -75,7 +82,9 @@ export async function fetchProxiedJsonWithInit<T>(
   init: ProxiedRequestInit = {}
 ): Promise<T> {
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  const rawMs = init.timeoutMs ?? FETCH_TIMEOUT_MS;
+  const effectiveMs = Math.min(Math.max(rawMs, 3_000), 120_000);
+  const timer = setTimeout(() => ac.abort(), effectiveMs);
   let r: Response;
   try {
     r = await fetch(proxiedUrl(url), {
@@ -87,7 +96,7 @@ export async function fetchProxiedJsonWithInit<T>(
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
       throw new Error(
-        `Request timed out after ${FETCH_TIMEOUT_MS / 1000}s. Check the server URL and your network.`
+        `Request timed out after ${effectiveMs / 1000}s. Check the server URL and your network.`
       );
     }
     throw e;
@@ -431,7 +440,10 @@ async function createNodecastTranscodeUrl(
   inflight = (async (): Promise<string | null> => {
     try {
       const probe = await nodecastProbeUrl(nodecastBase, upstreamUrl, headers);
-      await fetchProxiedJsonWithInit<unknown>(probe, { headers });
+      await fetchProxiedJsonWithInit<unknown>(probe, {
+        headers,
+        timeoutMs: TRANSCODE_PROBE_WARM_FETCH_MS,
+      });
     } catch {
       // optional warm-up
     }
@@ -452,6 +464,7 @@ async function createNodecastTranscodeUrl(
           method: "POST",
           headers: postHeaders,
           body: postBody,
+          timeoutMs: TRANSCODE_SESSION_FETCH_MS,
         });
         const fromPlaylist = playlistUrlFromNodecastTranscodeResponse(payload, nodecastBase);
         if (fromPlaylist) {
@@ -510,7 +523,24 @@ async function resolveCandidateToPlayableUrl(
     /* keep c */
   }
   try {
-    const r = await fetch(proxiedUrl(c), { method: "GET", headers });
+    const ac = new AbortController();
+    const probeTimer = setTimeout(() => ac.abort(), PLAYABLE_PROBE_FETCH_MS);
+    const probeHeaders: Record<string, string> = {
+      ...(headers ?? {}),
+      "X-Playable-Probe": "1",
+    };
+    let r: Response;
+    try {
+      r = await fetch(proxiedUrl(c), {
+        method: "GET",
+        headers: probeHeaders,
+        signal: ac.signal,
+      });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(probeTimer);
+    }
     if (!r.ok) return null;
     const ct = (r.headers.get("content-type") || "").toLowerCase();
 

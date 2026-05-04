@@ -2039,6 +2039,48 @@ a.topbar__admin-link {
   object-fit: contain;
 }
 
+.player-buffering {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  background: linear-gradient(180deg, rgba(8, 7, 14, 0.82) 0%, rgba(6, 5, 12, 0.92) 100%);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.player-buffering.hidden {
+  display: none !important;
+}
+
+.player-buffering__spinner {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--vel-primary, #8a2be2);
+  animation: player-buffering-spin 0.75s linear infinite;
+  box-shadow: 0 0 20px var(--vel-accent-glow, rgba(138, 43, 226, 0.25));
+}
+
+.player-buffering__label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(245, 243, 255, 0.88);
+}
+
+@keyframes player-buffering-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Native controls strip (play, volume…) — lighter than default black (Chromium / Safari / Edge) */
 .player-container video::-webkit-media-controls-panel {
   background-image: linear-gradient(

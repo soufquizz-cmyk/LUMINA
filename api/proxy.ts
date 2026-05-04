@@ -347,7 +347,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 60_000);
+  const defaultUpstreamMs = 60_000;
+  const transcodeCapRaw = Number(process.env.XTREAM_PROXY_TRANSCODE_SESSION_MS);
+  const transcodeSessionCapMs = Number.isFinite(transcodeCapRaw)
+    ? Math.min(Math.max(transcodeCapRaw, 3_000), 120_000)
+    : 20_000;
+  const streamProbeCapRaw = Number(process.env.XTREAM_PROXY_STREAM_PROBE_MS);
+  const streamProbeCapMs = Number.isFinite(streamProbeCapRaw)
+    ? Math.min(Math.max(streamProbeCapRaw, 3_000), 120_000)
+    : 18_000;
+  let abortMs = defaultUpstreamMs;
+  if (method === "POST" && /\/api\/transcode\/session(?:\?|$)/i.test(target)) {
+    abortMs = Math.min(defaultUpstreamMs, transcodeSessionCapMs);
+  } else if (
+    method === "GET" &&
+    /\/api\/proxy\/stream(?:\?|$)/i.test(target) &&
+    getHeader(req, "x-playable-probe") === "1"
+  ) {
+    abortMs = Math.min(defaultUpstreamMs, streamProbeCapMs);
+  }
+  const t = setTimeout(() => ac.abort(), abortMs);
   try {
     const upstream = await fetch(target, {
       signal: ac.signal,
@@ -420,7 +439,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
     const msg =
       e instanceof Error && e.name === "AbortError"
-        ? "Upstream request timed out (60s)."
+        ? `Upstream request timed out (${Math.round(abortMs / 1000)}s).`
         : e instanceof Error
           ? e.message
           : "Proxy error";

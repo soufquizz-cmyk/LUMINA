@@ -1131,6 +1131,18 @@ function preloadVodDetailHeroBackground(
   attempt(primaryUrl, gradient, Boolean(fallbackUrl));
 }
 
+/** Masque « Regarder » si ce titre est celui du lecteur et le lecteur est affiché (y compris pendant le chargement). */
+function shouldHideCatalogRegarderButton(s: LiveStream, tab: CatalogMediaTab): boolean {
+  if (activeStreamId !== s.stream_id) return false;
+  if (tab === "movies") {
+    return Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
+  }
+  if (tab === "series") {
+    return Boolean(!elPlayerContainer.classList.contains("hidden"));
+  }
+  return false;
+}
+
 function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void {
   if (!state) return;
   const st = state;
@@ -1192,9 +1204,14 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
   btnWatch.type = "button";
   btnWatch.className = "vel-vod-detail__watch primary";
   btnWatch.textContent = "Regarder";
+  btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
   btnWatch.addEventListener("click", () => {
     activeStreamId = s.stream_id;
-    void playStreamByMode(s);
+    btnWatch.classList.add("hidden");
+    void (async () => {
+      await playStreamByMode(s);
+      btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
+    })();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
@@ -1271,6 +1288,8 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
       bg.classList.remove("vel-vod-detail__bg--loading", "vel-vod-detail__bg--entered");
       bg.style.backgroundImage = "";
     }
+
+    btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
   })();
 }
 
@@ -2951,6 +2970,7 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
             "Impossible de résoudre l’URL de ce film (proxy VOD Nodecast)."
           );
         }
+        activeStreamId = null;
         return;
       }
       if (!sameOrigin(resolved, state.base)) {
@@ -2959,6 +2979,7 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
             "URL de lecture externe bloquée ; proxy requis."
           );
         }
+        activeStreamId = null;
         return;
       }
       // Liste / autre navigation pendant l’await : ne pas relancer le lecteur.

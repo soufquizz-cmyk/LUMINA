@@ -33,6 +33,8 @@ import {
   resolveNodecastStreamUrl,
   resolveNodecastVodStreamUrl,
   resolveNodecastSeriesPlayableUrl,
+  fetchNodecastVodInfo,
+  fetchNodecastSeriesInfo,
   proxiedUrl,
   imageUrlForDisplay,
   normalizeServerInput,
@@ -87,6 +89,11 @@ const elLoginPanel = document.querySelector(".login-panel") as HTMLElement;
 const elCatPills = $("#cat-pills") as HTMLDivElement;
 const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
 const elVideo = $("#video") as HTMLVideoElement;
+const elVideoVod = document.getElementById("video-vod") as HTMLVideoElement | null;
+const elVodPlayerContainer = document.getElementById("vod-player-container") as HTMLElement | null;
+const elNowPlayingVod = document.getElementById("now-playing-vod") as HTMLDivElement | null;
+const elVodPlayerBuffering = document.getElementById("vod-player-buffering") as HTMLDivElement | null;
+const elBtnCloseVodPlayer = document.getElementById("btn-close-vod-player") as HTMLButtonElement | null;
 const elPlayerBuffering = document.getElementById("player-buffering") as HTMLDivElement | null;
 const elNowPlaying = $("#now-playing") as HTMLDivElement;
 const elBtnLogout = $("#btn-logout") as HTMLButtonElement;
@@ -263,7 +270,18 @@ let state: {
 } | null = null;
 
 let hls: Hls | null = null;
+let hlsVod: Hls | null = null;
 let activeStreamId: number | null = null;
+
+type VodMovieUiPhase = "list" | "detail";
+let vodMovieUiPhase: VodMovieUiPhase = "list";
+let vodDetailStream: LiveStream | null = null;
+
+type SeriesUiPhase = "list" | "detail";
+let seriesUiPhase: SeriesUiPhase = "list";
+let seriesDetailStream: LiveStream | null = null;
+
+type CatalogMediaTab = "movies" | "series";
 
 function applyPresetTheme(key: string): void {
   const t = THEMES[key] || THEMES.default;
@@ -354,14 +372,18 @@ function setTabsActive(tab: UiTab): void {
 
 /** × sur le lecteur : visible seulement sur la grille bouquets (hors package), lecteur affiché. */
 function syncPlayerDismissOverlay(): void {
-  if (!elBtnClosePlayer) return;
-  const playerShown = !elPlayerContainer.classList.contains("hidden");
   const onPackagesGrid = uiShell === "packages";
-  const show = playerShown && onPackagesGrid && state != null;
-  elBtnClosePlayer.classList.toggle("hidden", !show);
+  const liveShown = !elPlayerContainer.classList.contains("hidden");
+  const vodShown = Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
+  const ok = state != null && onPackagesGrid;
+  elBtnClosePlayer?.classList.toggle("hidden", !(liveShown && ok));
+  elBtnCloseVodPlayer?.classList.toggle("hidden", !(vodShown && ok));
 }
 
 function showPlayerChrome(show: boolean): void {
+  if (show) {
+    destroyVodPlayer();
+  }
   elPlayerContainer.classList.toggle("hidden", !show);
   elPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
   elNowPlaying.classList.toggle("hidden", !show);
@@ -369,10 +391,30 @@ function showPlayerChrome(show: boolean): void {
   syncPlayerDismissOverlay();
 }
 
+function showVodPlayerChrome(show: boolean): void {
+  if (!elVodPlayerContainer || !elNowPlayingVod) return;
+  if (show) {
+    destroyPlayer();
+  }
+  elVodPlayerContainer.classList.toggle("hidden", !show);
+  elVodPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
+  elNowPlayingVod.classList.toggle("hidden", !show);
+  elNowPlayingVod.setAttribute("aria-hidden", show ? "false" : "true");
+  syncPlayerDismissOverlay();
+}
+
 /** Arrête la lecture et masque le lecteur ; met à jour la liste des chaînes si on est encore dans un bouquet. */
 function closePlayerUserAction(): void {
   activeStreamId = null;
   destroyPlayer();
+  if (state && uiShell === "content" && uiAdminPackageId != null) {
+    renderPackageChannelList();
+  }
+}
+
+function closeVodPlayerUserAction(): void {
+  activeStreamId = null;
+  destroyVodPlayer();
   if (state && uiShell === "content" && uiAdminPackageId != null) {
     renderPackageChannelList();
   }
@@ -409,6 +451,37 @@ function destroyPlayer(): void {
   showPlayerChrome(false);
 }
 
+function setVodPlayerBufferingVisible(visible: boolean): void {
+  if (!elVodPlayerBuffering) return;
+  elVodPlayerBuffering.classList.toggle("hidden", !visible);
+  elVodPlayerBuffering.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
+function teardownVodMedia(): void {
+  if (!elVideoVod) return;
+  if (hlsVod) {
+    hlsVod.destroy();
+    hlsVod = null;
+  }
+  elVideoVod.onerror = null;
+  try {
+    elVideoVod.pause();
+  } catch {
+    /* ignore */
+  }
+  elVideoVod.removeAttribute("src");
+  elVideoVod.removeAttribute("title");
+  elVideoVod.load();
+  elVodPlayerContainer?.classList.remove("player-container--live-tv");
+}
+
+function destroyVodPlayer(): void {
+  teardownVodMedia();
+  setVodPlayerBufferingVisible(false);
+  if (elNowPlayingVod) elNowPlayingVod.textContent = "";
+  showVodPlayerChrome(false);
+}
+
 /** HLS manifest or Nodecast transcode playlist (not raw MKV/MP4). */
 function urlLooksLikeHls(href: string): boolean {
   const h = href.toLowerCase();
@@ -434,6 +507,7 @@ function playUrl(
   /** Live HLS (direct Xtream / chaîne Nodecast) : masque la barre de progression native (flux non borné). */
   hideNativeProgressBar = false
 ): void {
+  destroyVodPlayer();
   teardownPlaybackMedia();
   setPlayerBufferingVisible(false);
   const proxied = proxiedUrl(url);
@@ -502,6 +576,77 @@ function playUrl(
   }
 
   elNowPlaying.innerHTML = nowPlayingErrorMarkup(
+    "HLS non pris en charge dans ce navigateur."
+  );
+}
+
+/** Lecteur VOD : `<video>` et instance HLS séparées du direct TV. */
+function playVodUrl(url: string, label: string, upstreamAuth?: Record<string, string>): void {
+  if (!elVideoVod || !elNowPlayingVod) return;
+  teardownVodMedia();
+  setVodPlayerBufferingVisible(false);
+  const proxied = proxiedUrl(url);
+  elNowPlayingVod.innerHTML = nowPlayingLiveMarkup(label);
+  showVodPlayerChrome(true);
+
+  const hasUpstreamAuth = Boolean(
+    upstreamAuth &&
+      Object.values(upstreamAuth).some((v) => typeof v === "string" && v.trim())
+  );
+
+  if (urlLooksLikeProgressiveMedia(url) || urlLooksLikeProgressiveMedia(proxied)) {
+    elVideoVod.src = proxied;
+    elVideoVod.onerror = () => {
+      elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
+        "Lecture impossible (codec non pris en charge ou flux refusé)."
+      );
+    };
+    void elVideoVod.play().catch(() => {});
+    return;
+  }
+
+  if (
+    elVideoVod.canPlayType("application/vnd.apple.mpegurl") &&
+    !hasUpstreamAuth &&
+    urlLooksLikeHls(url)
+  ) {
+    elVideoVod.src = proxied;
+    void elVideoVod.play().catch(() => {});
+    return;
+  }
+
+  if (Hls.isSupported()) {
+    hlsVod = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      xhrSetup(xhr) {
+        if (!upstreamAuth) return;
+        for (const [k, v] of Object.entries(upstreamAuth)) {
+          if (typeof v !== "string" || !v.trim()) continue;
+          try {
+            xhr.setRequestHeader(k, v);
+          } catch {
+            /* ignore invalid header names */
+          }
+        }
+      },
+    });
+    hlsVod.loadSource(proxied);
+    hlsVod.attachMedia(elVideoVod);
+    hlsVod.on(Hls.Events.MANIFEST_PARSED, () => {
+      void elVideoVod.play().catch(() => {});
+    });
+    hlsVod.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal) {
+        elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
+          `Erreur lecture : ${data.type} / ${String(data.details)}`
+        );
+      }
+    });
+    return;
+  }
+
+  elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
     "HLS non pris en charge dans ce navigateur."
   );
 }
@@ -827,6 +972,250 @@ function closeAddChannelsToPackageDialog(): void {
   elDialogAddChannels?.close();
 }
 
+function syncCatalogBackButtonLabel(): void {
+  const lab = elBtnBackHome.querySelector(".back-btn__text");
+  if (!lab) return;
+  const inDetail =
+    uiShell === "content" &&
+    ((uiTab === "movies" && vodMovieUiPhase === "detail") ||
+      (uiTab === "series" && seriesUiPhase === "detail"));
+  lab.textContent = inDetail ? "Liste" : "Accueil";
+}
+
+function catalogPosterRowLooksPlaying(s: LiveStream): boolean {
+  if (activeStreamId !== s.stream_id) return false;
+  if (s.nodecast_media === "vod") {
+    return Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
+  }
+  return Boolean(elPlayerContainer && !elPlayerContainer.classList.contains("hidden"));
+}
+
+/** Notes renvoyées par `vod_streams` (rating ~ /10, rating_5based ~ /5). */
+function vodStreamsRowRatingLabel(s: LiveStream): string | null {
+  if (s.vod_rating != null && Number.isFinite(s.vod_rating)) {
+    return `★ ${s.vod_rating.toFixed(1)}`;
+  }
+  if (s.vod_rating_5based != null && Number.isFinite(s.vod_rating_5based)) {
+    return `★ ${s.vod_rating_5based.toFixed(1)}/5`;
+  }
+  return null;
+}
+
+function renderCatalogPosterGrid(streams: LiveStream[], tab: CatalogMediaTab): void {
+  if (!state) return;
+  const st = state;
+  const emptyEmoji = tab === "movies" ? "🎬" : "📺";
+  for (const s of streams) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "vel-vod-movie-card";
+    card.dataset.streamId = String(s.stream_id);
+    if (catalogPosterRowLooksPlaying(s)) {
+      card.classList.add("vel-vod-movie-card--active");
+    }
+
+    const media = document.createElement("div");
+    media.className = "vel-vod-movie-card__media";
+
+    const poster = document.createElement("div");
+    poster.className = "vel-vod-movie-card__poster";
+    const iconHref = resolvedIconUrl(s.stream_icon, st.base);
+    if (iconHref) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.src = proxiedUrl(iconHref);
+      img.addEventListener("error", () => {
+        poster.innerHTML = "";
+        poster.classList.add("vel-vod-movie-card__poster--empty");
+        poster.textContent = emptyEmoji;
+        poster.setAttribute("aria-hidden", "true");
+      });
+      poster.appendChild(img);
+    } else {
+      poster.classList.add("vel-vod-movie-card__poster--empty");
+      poster.textContent = emptyEmoji;
+      poster.setAttribute("aria-hidden", "true");
+    }
+
+    media.appendChild(poster);
+
+    if (tab === "movies") {
+      const ratingLabel = vodStreamsRowRatingLabel(s);
+      if (ratingLabel) {
+        const badge = document.createElement("span");
+        badge.className = "vel-vod-movie-card__rating-badge";
+        badge.textContent = ratingLabel;
+        badge.setAttribute("aria-label", `Note ${ratingLabel}`);
+        media.appendChild(badge);
+      }
+    }
+
+    const body = document.createElement("div");
+    body.className = "vel-vod-movie-card__body";
+    const title = document.createElement("span");
+    title.className = "vel-vod-movie-card__title";
+    const titleText = displayChannelName(s.name);
+    title.textContent = titleText;
+    title.title = titleText;
+    body.appendChild(title);
+
+    card.append(media, body);
+    card.addEventListener("click", () => {
+      if (tab === "movies") {
+        vodDetailStream = s;
+        vodMovieUiPhase = "detail";
+      } else {
+        seriesDetailStream = s;
+        seriesUiPhase = "detail";
+      }
+      destroyVodPlayer();
+      activeStreamId = null;
+      renderPackageChannelList();
+      syncCatalogBackButtonLabel();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
+    elDynamicList.appendChild(card);
+  }
+
+  if (streams.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "vel-empty-msg";
+    empty.textContent =
+      tab === "movies" ? "Aucun film dans ce bouquet." : "Aucune série dans ce bouquet.";
+    elDynamicList.appendChild(empty);
+  }
+}
+
+function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void {
+  if (!state) return;
+  const st = state;
+  const streamTitle = displayChannelName(s.name);
+  const sid = st.nodecastXtreamSourceId?.trim();
+  const iconHref = resolvedIconUrl(s.stream_icon, st.base);
+
+  const wrap = document.createElement("article");
+  wrap.className = "vel-vod-detail";
+  wrap.setAttribute("aria-label", streamTitle);
+
+  const bg = document.createElement("div");
+  bg.className = "vel-vod-detail__bg";
+  if (iconHref) {
+    bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.2) 0%, rgba(6,4,12,0.85) 45%, rgba(6,4,12,0.98) 100%), url("${proxiedUrl(iconHref)}")`;
+  }
+
+  const inner = document.createElement("div");
+  inner.className = "vel-vod-detail__inner";
+
+  const titleEl = document.createElement("h1");
+  titleEl.className = "vel-vod-detail__title";
+  titleEl.textContent = streamTitle;
+
+  const metaRow = document.createElement("div");
+  metaRow.className = "vel-vod-detail__meta";
+
+  const ratingEl = document.createElement("span");
+  ratingEl.className = "vel-vod-detail__rating";
+  ratingEl.textContent = "…";
+
+  const genreEl = document.createElement("span");
+  genreEl.className = "vel-vod-detail__genre";
+
+  metaRow.append(ratingEl, genreEl);
+
+  const plot = document.createElement("p");
+  plot.className = "vel-vod-detail__plot";
+  plot.textContent = "Chargement de la fiche…";
+
+  const castBlock = document.createElement("section");
+  castBlock.className = "vel-vod-detail__section";
+  const castH = document.createElement("h2");
+  castH.className = "vel-vod-detail__section-title";
+  castH.textContent = "Distribution";
+  const castP = document.createElement("p");
+  castP.className = "vel-vod-detail__cast";
+  castP.textContent = "—";
+  castBlock.append(castH, castP);
+
+  const directorBlock = document.createElement("section");
+  directorBlock.className = "vel-vod-detail__section";
+  const dirH = document.createElement("h2");
+  dirH.className = "vel-vod-detail__section-title";
+  dirH.textContent = "Réalisation";
+  const dirP = document.createElement("p");
+  dirP.className = "vel-vod-detail__director";
+  dirP.textContent = "—";
+  directorBlock.append(dirH, dirP);
+
+  const btnWatch = document.createElement("button");
+  btnWatch.type = "button";
+  btnWatch.className = "vel-vod-detail__watch primary";
+  btnWatch.textContent = "Regarder";
+  btnWatch.addEventListener("click", () => {
+    activeStreamId = s.stream_id;
+    void playStreamByMode(s);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  inner.append(titleEl, metaRow, plot, castBlock, directorBlock, btnWatch);
+  wrap.append(bg, inner);
+  elDynamicList.appendChild(wrap);
+
+  const requestedId = s.stream_id;
+  const noPlotCopy =
+    tab === "movies"
+      ? "Aucune description disponible pour ce titre."
+      : "Aucune description disponible pour cette série.";
+
+  void (async () => {
+    const info =
+      sid && sid.length > 0
+        ? tab === "movies"
+          ? await fetchNodecastVodInfo(st.base, sid, requestedId, st.nodecastAuthHeaders, streamTitle)
+          : await fetchNodecastSeriesInfo(st.base, sid, requestedId, st.nodecastAuthHeaders, streamTitle)
+        : null;
+    const still =
+      tab === "movies"
+        ? vodDetailStream?.stream_id === requestedId && uiTab === "movies"
+        : seriesDetailStream?.stream_id === requestedId && uiTab === "series";
+    if (!state || !still) return;
+
+    const displayTitle = (info?.title || streamTitle).trim() || streamTitle;
+    titleEl.textContent = displayTitle;
+
+    const rd = (info?.ratingDisplay ?? "").trim();
+    if (rd) {
+      ratingEl.textContent = `★ ${rd}`;
+    } else {
+      ratingEl.textContent = "";
+      ratingEl.classList.add("vel-vod-detail__rating--empty");
+    }
+
+    const gn = (info?.genre ?? "").trim();
+    genreEl.textContent = gn;
+    genreEl.classList.toggle("hidden", !gn);
+
+    plot.textContent = (info?.plot ?? "").trim() || noPlotCopy;
+
+    const c = (info?.cast ?? "").trim();
+    castP.textContent = c || "Non communiqué.";
+
+    const d = (info?.director ?? "").trim();
+    dirP.textContent = d || "—";
+    directorBlock.classList.toggle("hidden", !d);
+
+    const backdrop = info?.backdropUrl?.trim();
+    const poster = info?.posterUrl?.trim();
+    if (backdrop) {
+      bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.2) 0%, rgba(6,4,12,0.85) 45%, rgba(6,4,12,0.98) 100%), url("${imageUrlForDisplay(backdrop)}")`;
+    } else if (poster) {
+      bg.style.backgroundImage = `linear-gradient(180deg, rgba(6,4,12,0.35) 0%, rgba(6,4,12,0.95) 100%), url("${imageUrlForDisplay(poster)}")`;
+    }
+  })();
+}
+
 function renderPackageChannelList(): void {
   if (!state || uiAdminPackageId == null) return;
   const base = streamsDisplayedForOpenPackage(uiAdminPackageId);
@@ -834,6 +1223,43 @@ function renderPackageChannelList(): void {
   const adminTools = showAdminChannelCurateTools();
 
   elDynamicList.innerHTML = "";
+
+  if (uiTab === "movies") {
+    if (vodMovieUiPhase === "detail" && vodDetailStream) {
+      elDynamicList.classList.remove("item-list--vod-vertical");
+      elDynamicList.classList.add("item-list--vod-film-detail");
+      elContentView.classList.add("content-view--vod-film-detail");
+      renderCatalogMediaDetailView(vodDetailStream, "movies");
+    } else {
+      elDynamicList.classList.remove("item-list--vod-film-detail");
+      elContentView.classList.remove("content-view--vod-film-detail");
+      elDynamicList.classList.add("item-list--vod-vertical");
+      renderCatalogPosterGrid(filtered, "movies");
+    }
+    syncCatalogBackButtonLabel();
+    syncAdminAddChannelsButton();
+    return;
+  }
+
+  if (uiTab === "series") {
+    if (seriesUiPhase === "detail" && seriesDetailStream) {
+      elDynamicList.classList.remove("item-list--vod-vertical");
+      elDynamicList.classList.add("item-list--vod-film-detail");
+      elContentView.classList.add("content-view--vod-film-detail");
+      renderCatalogMediaDetailView(seriesDetailStream, "series");
+    } else {
+      elDynamicList.classList.remove("item-list--vod-film-detail");
+      elContentView.classList.remove("content-view--vod-film-detail");
+      elDynamicList.classList.add("item-list--vod-vertical");
+      renderCatalogPosterGrid(filtered, "series");
+    }
+    syncCatalogBackButtonLabel();
+    syncAdminAddChannelsButton();
+    return;
+  }
+
+  elDynamicList.classList.remove("item-list--vod-vertical", "item-list--vod-film-detail");
+  elContentView.classList.remove("content-view--vod-film-detail");
 
   for (const s of filtered) {
     const row = document.createElement("div");
@@ -1655,6 +2081,11 @@ function openAdminPackage(packageId: string): void {
   const pkg = findPackageById(packageId);
   if (!pkg) return;
   const tab: UiTab = uiTab === "movies" || uiTab === "series" ? uiTab : "live";
+  vodMovieUiPhase = "list";
+  vodDetailStream = null;
+  seriesUiPhase = "list";
+  seriesDetailStream = null;
+  destroyVodPlayer();
   uiShell = "content";
   uiTab = tab;
   uiAdminPackageId = packageId;
@@ -1674,6 +2105,11 @@ function openAdminPackage(packageId: string): void {
 /** Grille bouquets : conserve l’onglet (Live / Films / Séries). */
 function showPackagesShell(): void {
   activeStreamId = null;
+  vodMovieUiPhase = "list";
+  vodDetailStream = null;
+  seriesUiPhase = "list";
+  seriesDetailStream = null;
+  destroyVodPlayer();
   uiShell = "packages";
   uiAdminPackageId = null;
   setTabsActive(uiTab);
@@ -1681,6 +2117,8 @@ function showPackagesShell(): void {
   elPackagesView.classList.remove("hidden");
   elMainTabs.classList.remove("hidden");
   elContentView.classList.add("hidden");
+  elContentView.classList.remove("content-view--vod-film-detail");
+  elDynamicList.classList.remove("item-list--vod-film-detail");
   elCatPillsWrap.classList.add("hidden");
   selectedPillId = "all";
   syncAdminAddChannelsButton();
@@ -2283,6 +2721,11 @@ function showVodPlaceholder(
 ): void {
   activeStreamId = null;
   destroyPlayer();
+  destroyVodPlayer();
+  vodMovieUiPhase = "list";
+  vodDetailStream = null;
+  seriesUiPhase = "list";
+  seriesDetailStream = null;
   uiShell = "content";
   uiTab = kind;
   uiAdminPackageId = null;
@@ -2292,6 +2735,8 @@ function showVodPlaceholder(
   elMainTabs.classList.remove("hidden");
   elContentView.classList.remove("hidden");
   elCatPillsWrap.classList.add("hidden");
+  elDynamicList.classList.remove("item-list--vod-vertical", "item-list--vod-film-detail");
+  elContentView.classList.remove("content-view--vod-film-detail");
   elDynamicList.innerHTML = "";
   const msg = document.createElement("div");
   msg.className = "vel-empty-msg";
@@ -2380,6 +2825,11 @@ async function openNodecastMediaShellAsync(tab: "movies" | "series"): Promise<vo
   }
   activeStreamId = null;
   destroyPlayer();
+  destroyVodPlayer();
+  vodMovieUiPhase = "list";
+  vodDetailStream = null;
+  seriesUiPhase = "list";
+  seriesDetailStream = null;
   uiTab = tab;
   uiShell = "packages";
   uiAdminPackageId = null;
@@ -2398,18 +2848,68 @@ async function openNodecastMediaShellAsync(tab: "movies" | "series"): Promise<vo
 
 function onTabClick(tab: UiTab): void {
   if (tab === "live") {
+    vodMovieUiPhase = "list";
+    vodDetailStream = null;
+    seriesUiPhase = "list";
+    seriesDetailStream = null;
+    destroyVodPlayer();
     goLiveHome();
     return;
+  }
+  if (tab === "movies") {
+    seriesUiPhase = "list";
+    seriesDetailStream = null;
+    destroyPlayer();
+  }
+  if (tab === "series") {
+    vodMovieUiPhase = "list";
+    vodDetailStream = null;
+    destroyVodPlayer();
   }
   openNodecastMediaShell(tab === "movies" ? "movies" : "series");
 }
 
 async function playStreamByMode(s: LiveStream): Promise<void> {
   if (!state) return;
-  const hideLiveProgress =
-    s.nodecast_media !== "vod" && s.nodecast_media !== "series";
-  teardownPlaybackMedia();
+  const isVodFilm = s.nodecast_media === "vod";
+  const hideLiveProgress = !isVodFilm && s.nodecast_media !== "series";
+
   if (state.mode === "nodecast") {
+    if (isVodFilm) {
+      setVodPlayerBufferingVisible(true);
+      showVodPlayerChrome(true);
+      if (elNowPlayingVod) {
+        elNowPlayingVod.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
+      }
+      let resolved: string | null = null;
+      try {
+        resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
+      } finally {
+        setVodPlayerBufferingVisible(false);
+      }
+      if (!resolved) {
+        if (elNowPlayingVod) {
+          elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
+            "Impossible de résoudre l’URL de ce film (proxy VOD Nodecast)."
+          );
+        }
+        return;
+      }
+      if (!sameOrigin(resolved, state.base)) {
+        if (elNowPlayingVod) {
+          elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
+            "URL de lecture externe bloquée ; proxy requis."
+          );
+        }
+        return;
+      }
+      s.direct_source = resolved;
+      playVodUrl(resolved, displayChannelName(s.name), state.nodecastAuthHeaders);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    teardownPlaybackMedia();
     showPlayerChrome(true);
     setPlayerBufferingVisible(true);
     elNowPlaying.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
@@ -2422,8 +2922,6 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
           s.nodecast_source_id,
           state.nodecastAuthHeaders
         );
-      } else if (s.nodecast_media === "vod") {
-        resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
       } else {
         resolved = await resolveNodecastStreamUrl(state.base, s, state.nodecastAuthHeaders);
       }
@@ -2434,9 +2932,7 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
       elNowPlaying.innerHTML = nowPlayingErrorMarkup(
         s.nodecast_media === "series"
           ? "Impossible de lire cette série (épisode / API get_series_info)."
-          : s.nodecast_media === "vod"
-            ? "Impossible de résoudre l’URL de ce film (proxy VOD Nodecast)."
-            : "Impossible de résoudre l’URL de cette chaîne (API Nodecast)."
+          : "Impossible de résoudre l’URL de cette chaîne (API Nodecast)."
       );
       return;
     }
@@ -2520,6 +3016,7 @@ async function connect(): Promise<void> {
     selectedPillId = "all";
     activeStreamId = null;
     destroyPlayer();
+    destroyVodPlayer();
     elNowPlaying.textContent = "";
 
     goLiveHome();
@@ -2560,11 +3057,18 @@ function disconnect(): void {
   populateCountrySelectFromAdmin();
   state = null;
   activeStreamId = null;
+  vodMovieUiPhase = "list";
+  vodDetailStream = null;
+  seriesUiPhase = "list";
+  seriesDetailStream = null;
   selectedPillId = "all";
   uiTab = "live";
   uiShell = "packages";
   uiAdminPackageId = null;
   destroyPlayer();
+  destroyVodPlayer();
+  elDynamicList.classList.remove("item-list--vod-vertical", "item-list--vod-film-detail");
+  elContentView.classList.remove("content-view--vod-film-detail");
   elDynamicList.innerHTML = "";
   elCatPills.innerHTML = "";
   elPackagesView.innerHTML = "";
@@ -2623,7 +3127,24 @@ function onCountryChange(): void {
 elBtnConnect.addEventListener("click", () => void connect());
 elBtnLogout.addEventListener("click", disconnect);
 elBtnClosePlayer?.addEventListener("click", () => closePlayerUserAction());
+elBtnCloseVodPlayer?.addEventListener("click", () => closeVodPlayerUserAction());
 elBtnBackHome.addEventListener("click", () => {
+  if (uiTab === "movies" && vodMovieUiPhase === "detail" && uiShell === "content") {
+    vodMovieUiPhase = "list";
+    vodDetailStream = null;
+    destroyVodPlayer();
+    if (state && uiAdminPackageId != null) renderPackageChannelList();
+    syncCatalogBackButtonLabel();
+    return;
+  }
+  if (uiTab === "series" && seriesUiPhase === "detail" && uiShell === "content") {
+    seriesUiPhase = "list";
+    seriesDetailStream = null;
+    destroyPlayer();
+    if (state && uiAdminPackageId != null) renderPackageChannelList();
+    syncCatalogBackButtonLabel();
+    return;
+  }
   showPackagesShell();
 });
 
@@ -2653,6 +3174,20 @@ function toggleVideoPlayPause(ev: MouseEvent): void {
 }
 
 elVideo.addEventListener("click", toggleVideoPlayPause);
+
+function toggleVideoPlayPauseVod(ev: MouseEvent): void {
+  if (!elVideoVod) return;
+  if (!hlsVod && !elVideoVod.src && !elVideoVod.currentSrc) return;
+  const r = elVideoVod.getBoundingClientRect();
+  const y = ev.clientY - r.top;
+  const controlsReservePx = 52;
+  if (y > r.height - controlsReservePx) return;
+  ev.preventDefault();
+  if (elVideoVod.paused) void elVideoVod.play().catch(() => {});
+  else elVideoVod.pause();
+}
+
+elVideoVod?.addEventListener("click", toggleVideoPlayPauseVod);
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.activeElement?.closest(".login-panel")) {

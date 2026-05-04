@@ -21,6 +21,9 @@ export type LiveStream = {
   nodecast_media?: "live" | "vod" | "series";
   /** VOD row: container from panel (e.g. mp4) for `/movie/{id}.{ext}` proxy paths. */
   container_extension?: string;
+  /** Liste `vod_streams` (panel Xtream) : note TMDB-style et note /5. */
+  vod_rating?: number;
+  vod_rating_5based?: number;
 };
 
 export type ProxiedRequestInit = {
@@ -617,6 +620,15 @@ async function resolveCandidateToPlayableUrl(
   }
 }
 
+function parseOptionalNumericField(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim()) {
+    const n = Number(String(v).replace(",", ".").trim());
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
 export function mapNodecastChannelToLiveStream(raw: unknown, index: number): LiveStream | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
@@ -645,6 +657,8 @@ export function mapNodecastChannelToLiveStream(raw: unknown, index: number): Liv
     containerExtRaw && /^[a-z0-9]+$/i.test(containerExtRaw)
       ? containerExtRaw.toLowerCase()
       : undefined;
+  const vod_rating = parseOptionalNumericField(c.rating);
+  const vod_rating_5based = parseOptionalNumericField(c.rating_5based);
   return {
     stream_id: Number.isFinite(numericId) ? numericId : index + 1,
     name,
@@ -653,6 +667,8 @@ export function mapNodecastChannelToLiveStream(raw: unknown, index: number): Liv
     direct_source: directSource || undefined,
     container_extension,
     nodecast_channel_id: String(c.channel_id ?? c.id ?? c.stream_id ?? ""),
+    ...(vod_rating != null ? { vod_rating } : {}),
+    ...(vod_rating_5based != null ? { vod_rating_5based } : {}),
   };
 }
 
@@ -1288,6 +1304,9 @@ async function tryResolveVodFromGetInfo(
   headers?: Record<string, string>
 ): Promise<string | null> {
   const infoUrls = [
+    `${b}/api/proxy/xtream/${sid}/vod_info?vod_id=${streamId}`,
+    `${b}/api/proxy/xtream/${sid}/movie_info?vod_id=${streamId}`,
+    `${b}/api/proxy/xtream/${sid}/get_vod_info?vod_id=${streamId}`,
     `${b}/api/proxy/xtream/${sid}/player_api?action=get_vod_info&vod_id=${streamId}`,
     `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_vod_info&vod_id=${streamId}`,
   ];
@@ -1447,6 +1466,181 @@ function extractFirstEpisodeStreamId(payload: unknown): number | null {
 }
 
 /** Resolve first playable episode for a Xtream series (get_series_info → VOD stream). */
+/** Enriched metadata from Xtream `get_vod_info` (when the panel exposes it). */
+export type VodInfoDetails = {
+  title: string;
+  plot: string;
+  cast: string;
+  director: string;
+  genre: string;
+  ratingDisplay: string;
+  backdropUrl: string | null;
+  posterUrl: string | null;
+};
+
+function extractInfoObject(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== "object") return null;
+  const info = (payload as Record<string, unknown>).info;
+  if (info && typeof info === "object" && !Array.isArray(info)) {
+    return info as Record<string, unknown>;
+  }
+  return null;
+}
+
+function firstNonEmptyString(...vals: unknown[]): string {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function firstHttpUrlFromUnknown(v: unknown): string | null {
+  if (typeof v === "string" && /^https?:\/\//i.test(v.trim())) return v.trim();
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      const u = firstHttpUrlFromUnknown(item);
+      if (u) return u;
+    }
+  }
+  return null;
+}
+
+function parseVodInfoFromPayload(payload: unknown, fallbackTitle: string): VodInfoDetails {
+  const info = extractInfoObject(payload);
+  const md = extractMovieDataBlob(payload);
+  const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+
+  const plot = firstNonEmptyString(
+    info?.plot,
+    info?.description,
+    info?.plot_outline,
+    info?.storyline,
+    md?.plot,
+    md?.description,
+    root.plot,
+    root.description
+  );
+  const cast = firstNonEmptyString(info?.cast, md?.cast, root.cast);
+  const director = firstNonEmptyString(info?.director, md?.director, root.director);
+  const genre = firstNonEmptyString(info?.genre, md?.genre, root.genre);
+
+  const rating = firstNonEmptyString(info?.rating, md?.rating, root.rating);
+  const r5 = info?.rating_5based ?? md?.rating_5based ?? root.rating_5based;
+  let ratingDisplay = rating;
+  if (!ratingDisplay && r5 != null && String(r5).trim()) {
+    const s5 = String(r5).trim();
+    ratingDisplay = s5.includes("/") ? s5 : `${s5}/5`;
+  }
+
+  const title = firstNonEmptyString(
+    info?.name,
+    info?.title,
+    info?.series_name,
+    info?.seriesName,
+    md?.name,
+    md?.title,
+    md?.series_name,
+    root.name,
+    root.title,
+    fallbackTitle
+  );
+
+  const backdropUrl =
+    firstHttpUrlFromUnknown(info?.backdrop_path) ??
+    firstHttpUrlFromUnknown(md?.backdrop_path) ??
+    firstHttpUrlFromUnknown(info?.backdrop) ??
+    null;
+
+  const posterUrl =
+    firstHttpUrlFromUnknown(info?.movie_image) ??
+    firstHttpUrlFromUnknown(info?.cover_big) ??
+    firstHttpUrlFromUnknown(info?.cover) ??
+    firstHttpUrlFromUnknown(md?.cover_big) ??
+    firstHttpUrlFromUnknown(md?.cover) ??
+    firstHttpUrlFromUnknown(md?.movie_image) ??
+    firstHttpUrlFromUnknown(info?.icon) ??
+    null;
+
+  return {
+    title: title || fallbackTitle,
+    plot,
+    cast,
+    director,
+    genre,
+    ratingDisplay,
+    backdropUrl,
+    posterUrl,
+  };
+}
+
+/**
+ * Fetches `get_vod_info` via the Nodecast Xtream proxy. Returns null on hard failure;
+ * on success always returns at least `title` (from API or `fallbackTitle`).
+ */
+export async function fetchNodecastVodInfo(
+  base: string,
+  sourceId: string,
+  vodStreamId: number,
+  authHeaders?: Record<string, string>,
+  fallbackTitle = ""
+): Promise<VodInfoDetails | null> {
+  const rawSid = sourceId.trim();
+  if (!rawSid) return null;
+  const b = base.replace(/\/+$/, "");
+  const sid = encodeURIComponent(rawSid);
+  const q = encodeURIComponent(String(vodStreamId));
+  const infoUrls = [
+    `${b}/api/proxy/xtream/${sid}/vod_info?vod_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/movie_info?vod_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/get_vod_info?vod_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/player_api?action=get_vod_info&vod_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_vod_info&vod_id=${q}`,
+  ];
+  for (const u of infoUrls) {
+    try {
+      const payload = await fetchProxiedJsonWithInit<unknown>(u, { headers: authHeaders });
+      if (xtreamProxyJsonLooksRejected(payload)) continue;
+      return parseVodInfoFromPayload(payload, fallbackTitle);
+    } catch {
+      /* try next URL */
+    }
+  }
+  return null;
+}
+
+/**
+ * Métadonnées série via REST `series_info` (Nodecast) ou repli `player_api?action=get_series_info`.
+ * Même forme que {@link VodInfoDetails} pour réutiliser l’UI fiche.
+ */
+export async function fetchNodecastSeriesInfo(
+  base: string,
+  sourceId: string,
+  seriesId: number,
+  authHeaders?: Record<string, string>,
+  fallbackTitle = ""
+): Promise<VodInfoDetails | null> {
+  const rawSid = sourceId.trim();
+  if (!rawSid) return null;
+  const b = base.replace(/\/+$/, "");
+  const sid = encodeURIComponent(rawSid);
+  const q = encodeURIComponent(String(seriesId));
+  const infoUrls = [
+    `${b}/api/proxy/xtream/${sid}/series_info?series_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/player_api?action=get_series_info&series_id=${q}`,
+    `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_series_info&series_id=${q}`,
+  ];
+  for (const u of infoUrls) {
+    try {
+      const payload = await fetchProxiedJsonWithInit<unknown>(u, { headers: authHeaders });
+      if (xtreamProxyJsonLooksRejected(payload)) continue;
+      return parseVodInfoFromPayload(payload, fallbackTitle);
+    } catch {
+      /* try next URL */
+    }
+  }
+  return null;
+}
+
 export async function resolveNodecastSeriesPlayableUrl(
   base: string,
   seriesId: number,
@@ -1457,6 +1651,7 @@ export async function resolveNodecastSeriesPlayableUrl(
   const sid = encodeURIComponent(sourceId);
   const seriesQ = encodeURIComponent(String(seriesId));
   const infoUrls = [
+    `${b}/api/proxy/xtream/${sid}/series_info?series_id=${seriesQ}`,
     `${b}/api/proxy/xtream/${sid}/player_api?action=get_series_info&series_id=${seriesQ}`,
     `${b}/api/proxy/xtream/${sid}/player_api.php?action=get_series_info&series_id=${seriesQ}`,
   ];

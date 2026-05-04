@@ -241,6 +241,40 @@
               </div>
             </div>
           </div>
+
+          <div
+            id="now-playing-vod"
+            class="player-now-playing vel-now-playing vel-now-playing--vod hidden"
+            role="status"
+            aria-live="polite"
+            aria-hidden="true"
+          ></div>
+
+          <div id="vod-player-container" class="player-container player-container--vod hidden" aria-hidden="true">
+            <button
+              type="button"
+              id="btn-close-vod-player"
+              class="vel-player-dismiss-x hidden"
+              title="Fermer le lecteur VOD"
+              aria-label="Fermer le lecteur VOD"
+            >
+              ×
+            </button>
+            <div class="video-wrapper">
+              <video id="video-vod" controls playsinline></video>
+              <div
+                id="vod-player-buffering"
+                class="player-buffering hidden"
+                aria-hidden="true"
+                role="status"
+                aria-live="polite"
+                aria-label="Chargement du film"
+              >
+                <div class="player-buffering__spinner" aria-hidden="true"></div>
+                <span class="player-buffering__label">Chargement…</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="vel-body">

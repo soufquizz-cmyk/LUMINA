@@ -3041,6 +3041,7 @@ a.topbar__admin-link {
 
 .main--velora .nav-tabs {
   display: flex;
+  justify-content: center;
   gap: 12px;
   padding: 0 1.25rem;
   margin-bottom: 1.5rem;

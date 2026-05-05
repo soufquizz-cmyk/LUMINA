@@ -1982,6 +1982,21 @@ a.topbar__admin-link {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+/* Accueil + admin : même bande sticky que le lecteur (pas dans .vel-body qui défile). */
+.vel-package-toolbar-sticky {
+  display: none;
+  flex-shrink: 0;
+  width: calc(100% - 2rem);
+  max-width: 56rem;
+  margin: 0.35rem auto 0;
+  padding: 0 max(1rem, env(safe-area-inset-right)) 0 max(1rem, env(safe-area-inset-left));
+  box-sizing: border-box;
+}
+
+.main--velora:has(#content-view:not(.hidden)) .vel-package-toolbar-sticky {
+  display: block;
+}
+
 /* Fiche film / série : pas de bande vide (ex-zone lecteur) entre header et .vel-content-toolbar */
 .main--velora:has(#content-view.content-view--vod-film-detail:not(.hidden)) .vel-sticky-top {
   margin-bottom: 0;
@@ -3232,6 +3247,11 @@ a.topbar__admin-link {
   box-sizing: border-box;
 }
 
+/* Espace sous la barre Accueil sticky (retirée du flux .vel-body). */
+.main--velora:has(#content-view:not(.hidden):not(.content-view--vod-film-detail)) #content-view {
+  padding-top: 0.4rem;
+}
+
 #content-view.hidden {
   display: none !important;
 }
@@ -3254,12 +3274,15 @@ a.topbar__admin-link {
   padding-bottom: 0;
 }
 
-#content-view.content-view--vod-film-detail .vel-content-toolbar {
+.main--velora:has(#content-view.content-view--vod-film-detail:not(.hidden))
+  .vel-package-toolbar-sticky
+  .vel-content-toolbar {
   padding: 0.65rem max(1rem, env(safe-area-inset-right)) 0.55rem max(1rem, env(safe-area-inset-left));
   margin-bottom: 0;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(12, 10, 18, 0.95) 0%, rgba(12, 10, 18, 0.55) 100%);
+  border-radius: 0;
 }
 
 #dynamic-list.item-list.item-list--vod-film-detail {

@@ -386,6 +386,12 @@ function syncMainInPackageClass(): void {
   elMain.classList.toggle("main--velora-in-package", uiShell === "content" && uiAdminPackageId != null);
 }
 
+/** Scroll is on `#main` (`.main--velora`), not the window; grid scroll was kept when opening a package. */
+function resetVeloraMainScroll(): void {
+  elMain.scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+
 /** × sur le lecteur : visible seulement sur la grille bouquets (hors package), lecteur affiché. */
 function syncPlayerDismissOverlay(): void {
   const onPackagesGrid = uiShell === "packages";
@@ -2603,6 +2609,7 @@ function openAdminPackage(packageId: string): void {
   syncAdminAddChannelsButton();
   syncPlayerDismissOverlay();
   syncMainInPackageClass();
+  resetVeloraMainScroll();
 }
 
 /** Grille bouquets : conserve l’onglet (Live / Films / Séries). */

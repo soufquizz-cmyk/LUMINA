@@ -10,6 +10,8 @@ import {
 } from "./api/r2PackageCoverShared";
 import { fromBase64UrlUtf8, proxiedFullUrl } from "./api/proxyParamTransport";
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Match `VITE_PROXY_PREFIX` in `src/main.ts` (e.g. `/proxy.php` on Namecheap). */
@@ -598,62 +600,58 @@ export default defineConfig(({ mode }) => {
     server: {
       middlewareMode: false,
     },
-    plugins: [
-      {
-        name: "vite-autoconnect-html",
-        transformIndexHtml: {
-          order: "pre",
-          handler(html, ctx) {
-            if (!viteAutoconnect) return html;
-            const name = ctx.filename.replace(/\\/g, "/");
-            if (!name.endsWith("/index.html") && !name.endsWith("\\index.html")) return html;
-            let out = html.replace("<body>", '<body class="vite-autoconnect">');
-            if (!out.includes("vite-autoconnect")) {
-              out = html.replace("<body ", '<body class="vite-autoconnect" ');
-            }
-            out = out.replace('class="main main--velora hidden"', 'class="main main--velora"');
-            return out;
-          },
+    plugins: [{
+      name: "vite-autoconnect-html",
+      transformIndexHtml: {
+        order: "pre",
+        handler(html, ctx) {
+          if (!viteAutoconnect) return html;
+          const name = ctx.filename.replace(/\\/g, "/");
+          if (!name.endsWith("/index.html") && !name.endsWith("\\index.html")) return html;
+          let out = html.replace("<body>", '<body class="vite-autoconnect">');
+          if (!out.includes("vite-autoconnect")) {
+            out = html.replace("<body ", '<body class="vite-autoconnect" ');
+          }
+          out = out.replace('class="main main--velora hidden"', 'class="main main--velora"');
+          return out;
         },
       },
-      {
-        name: "r2-package-cover-upload",
-        configureServer(server) {
-          server.middlewares.use((req, res, next) => {
-            if (!isR2PackageCoverRoute(req.url)) {
-              next();
-              return;
-            }
-            const merged = { ...process.env, ...loadEnv(server.config.mode, process.cwd(), "") };
-            void handleR2PackageCoverRoute(req, res, merged);
-          });
-        },
-        configurePreviewServer(server) {
-          server.middlewares.use((req, res, next) => {
-            if (!isR2PackageCoverRoute(req.url)) {
-              next();
-              return;
-            }
-            const merged = { ...process.env, ...loadEnv(server.config.mode, process.cwd(), "") };
-            void handleR2PackageCoverRoute(req, res, merged);
-          });
-        },
+    }, {
+      name: "r2-package-cover-upload",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (!isR2PackageCoverRoute(req.url)) {
+            next();
+            return;
+          }
+          const merged = { ...process.env, ...loadEnv(server.config.mode, process.cwd(), "") };
+          void handleR2PackageCoverRoute(req, res, merged);
+        });
       },
-      {
-        name: "xtream-media-proxy",
-        configureServer(server) {
-          console.log(
-            "[xtream-proxy] Proxy ready. Failed upstream responses are logged. Verbose: XTREAM_PROXY_DEBUG=1 npm run dev"
-          );
-          server.middlewares.use(proxyMiddleware());
-        },
-        configurePreviewServer(server) {
-          console.log(
-            "[xtream-proxy] Preview proxy ready. Verbose: XTREAM_PROXY_DEBUG=1 npm run preview"
-          );
-          server.middlewares.use(proxyMiddleware());
-        },
+      configurePreviewServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (!isR2PackageCoverRoute(req.url)) {
+            next();
+            return;
+          }
+          const merged = { ...process.env, ...loadEnv(server.config.mode, process.cwd(), "") };
+          void handleR2PackageCoverRoute(req, res, merged);
+        });
       },
-    ],
+    }, {
+      name: "xtream-media-proxy",
+      configureServer(server) {
+        console.log(
+          "[xtream-proxy] Proxy ready. Failed upstream responses are logged. Verbose: XTREAM_PROXY_DEBUG=1 npm run dev"
+        );
+        server.middlewares.use(proxyMiddleware());
+      },
+      configurePreviewServer(server) {
+        console.log(
+          "[xtream-proxy] Preview proxy ready. Verbose: XTREAM_PROXY_DEBUG=1 npm run preview"
+        );
+        server.middlewares.use(proxyMiddleware());
+      },
+    }, cloudflare()],
   };
 });

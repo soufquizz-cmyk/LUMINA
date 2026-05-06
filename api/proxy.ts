@@ -160,7 +160,7 @@ function buildUpstreamHeaders(
       : acceptStr,
     "Accept-Language": "en-US,en;q=0.9",
     Referer: referer,
-    "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
+    "User-Agent": "VLC/3.0.18 LibVLC/3.0.18",
   };
   const cookie = cookieHeaderForUpstreamUrl(targetUrl);
   if (cookie) h.Cookie = cookie;
@@ -170,10 +170,16 @@ function buildUpstreamHeaders(
   const isLikelyMediaSegment =
     /\.(ts|m4s|mp4|m4v|aac|mp3|webm|mkv)(?:$|\?)/i.test(targetPath) ||
     /\/segment\//i.test(targetPath);
+  const isHlsChunkUrl =
+    /\.m3u8(?:$|\?)/i.test(targetPath) || /\.(ts|m4s)(?:$|\?)/i.test(targetPath);
   const range = getHeader(req, "range");
-  if (range && isLikelyMediaSegment && !/\.m3u8(?:$|\?)/i.test(targetPath)) h.Range = range;
+  if (range && isLikelyMediaSegment && !isHlsChunkUrl) h.Range = range;
   const authorization = getHeader(req, "authorization");
   if (authorization?.trim()) h.Authorization = authorization;
+  const ifNoneMatch = getHeader(req, "if-none-match");
+  if (ifNoneMatch?.trim()) h["If-None-Match"] = ifNoneMatch;
+  const ifModifiedSince = getHeader(req, "if-modified-since");
+  if (ifModifiedSince?.trim()) h["If-Modified-Since"] = ifModifiedSince;
   return h;
 }
 
@@ -233,10 +239,6 @@ const HOP_BY_HOP = new Set([
   "transfer-encoding",
   "content-encoding",
   "set-cookie",
-  "etag",
-  "cache-control",
-  "expires",
-  "last-modified",
 ]);
 
 function copyUpstreamHeadersToRes(upstream: Response, res: VercelResponse): void {
@@ -255,6 +257,18 @@ function setNoStoreHeaders(res: VercelResponse): void {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
+}
+
+function isLikelyMediaRequest(targetUrl: string, contentType: string): boolean {
+  const path = new URL(targetUrl).pathname.toLowerCase();
+  const ct = contentType.toLowerCase();
+  return (
+    /\.m3u8(?:$|\?)/i.test(path) ||
+    /\.(ts|m4s|m4v|mp4|aac|mp3|webm|mkv)(?:$|\?)/i.test(path) ||
+    ct.includes("mpegurl") ||
+    ct.startsWith("video/") ||
+    ct.startsWith("audio/")
+  );
 }
 
 function isAllowedTarget(target: string): boolean {
@@ -409,7 +423,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       !upstream.body
     ) {
       copyUpstreamHeadersToRes(upstream, res);
-      setNoStoreHeaders(res);
+      if (isLikelyMediaRequest(target, ct)) setNoStoreHeaders(res);
       res.end();
       return;
     }
@@ -423,7 +437,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     });
 
     copyUpstreamHeadersToRes(upstream, res);
-    setNoStoreHeaders(res);
+    if (isLikelyMediaRequest(target, ct)) setNoStoreHeaders(res);
 
     const webBody = upstream.body as import("stream/web").ReadableStream<Uint8Array>;
     const nodeReadable = Readable.fromWeb(webBody);

@@ -214,11 +214,12 @@ function resolve_url(string $ref, string $base): string {
 $host = (string) (parse_url($target, PHP_URL_HOST) ?? '');
 $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 $bodyIn = ($method !== 'GET' && $method !== 'HEAD') ? file_get_contents('php://input') : '';
+$looksM3u8 = (bool) preg_match('/\.m3u8(\?|#|$)/i', $target);
 
 $headers = [
   'Accept: ' . (!empty($_SERVER['HTTP_ACCEPT']) ? (string) $_SERVER['HTTP_ACCEPT'] : '*/*'),
   'Accept-Language: en-US,en;q=0.9',
-  'User-Agent: VLC/3.0.20 LibVLC/3.0.20',
+  'User-Agent: VLC/3.0.18 LibVLC/3.0.18',
   'Referer: ' . referer_for_upstream($target, $from),
 ];
 $cj = proxy_jar_get($host);
@@ -229,14 +230,14 @@ $auth = client_authorization();
 if ($auth !== null && $auth !== '') {
   $headers[] = 'Authorization: ' . $auth;
 }
-if (!empty($_SERVER['HTTP_RANGE'])) {
+$suppressRange = $looksM3u8 || (bool) preg_match('/\.(ts|m4s)(\?|#|$)/i', $target);
+if (!empty($_SERVER['HTTP_RANGE']) && !$suppressRange) {
   $headers[] = 'Range: ' . (string) $_SERVER['HTTP_RANGE'];
 }
 if ($bodyIn !== '' && !empty($_SERVER['CONTENT_TYPE'])) {
   $headers[] = 'Content-Type: ' . (string) $_SERVER['CONTENT_TYPE'];
 }
 
-$looksM3u8 = (bool) preg_match('/\.m3u8(\?|#|$)/i', $target);
 $bufferResponse = $looksM3u8 || $method !== 'GET';
 
 $respHttp = 200;

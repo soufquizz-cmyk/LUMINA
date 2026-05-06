@@ -1,4 +1,4 @@
-import Hls from "hls.js";
+import Hls, { ErrorTypes, type ErrorData } from "hls.js";
 import { isAdminSession, tryConsumeAdminAccessFromUrl } from "./adminSession";
 import {
   displayChannelName,
@@ -35,6 +35,7 @@ import {
   resolveNodecastSeriesPlayableUrl,
   fetchNodecastVodInfo,
   fetchNodecastSeriesInfo,
+  pingNodecastSourcesStatus,
   proxiedUrl,
   imageUrlForDisplay,
   normalizeServerInput,
@@ -100,6 +101,14 @@ const elCatPills = $("#cat-pills") as HTMLDivElement;
 const elCatPillsWrap = $("#cat-pills-wrap") as HTMLElement;
 const elVideo = $("#video") as HTMLVideoElement;
 const elVideoVod = document.getElementById("video-vod") as HTMLVideoElement | null;
+elVideo.preload = "auto";
+elVideo.crossOrigin = "anonymous";
+if (elVideoVod) {
+  elVideoVod.preload = "none";
+  elVideoVod.crossOrigin = "anonymous";
+  elVideoVod.muted = true;
+  elVideoVod.autoplay = false;
+}
 const elVodPlayerContainer = document.getElementById("vod-player-container") as HTMLElement | null;
 const elNowPlayingVod = document.getElementById("now-playing-vod") as HTMLDivElement | null;
 const elVodPlayerBuffering = document.getElementById("vod-player-buffering") as HTMLDivElement | null;
@@ -239,6 +248,41 @@ const ADMIN_GRID_TOOLS_KEY = "velora_admin_grid_tools";
 /** Same id as `providerLayout` « Autres » bucket — keep last in the list. */
 const OTHER_COUNTRY_ID = "country__other";
 
+/** Entrées pushState Velora encore « actives » (package, fiche VOD, lecteur). */
+let veloraUiHistoryDepth = 0;
+let veloraIgnoreHistoryPopstate = false;
+/** Évite un second `history.go` lorsque la fermeture du lecteur est déjà due à un popstate. */
+let veloraApplyingHistoryPopstate = false;
+
+function veloraPushNavigationState(tag: string): void {
+  try {
+    const prev = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+    window.history.pushState({ ...(prev as object), veloraNav: tag }, "", window.location.href);
+    veloraUiHistoryDepth++;
+  } catch {
+    /* ignore */
+  }
+}
+
+function stripVeloraHistorySilently(steps: number): void {
+  if (steps <= 0 || veloraUiHistoryDepth <= 0) return;
+  const n = Math.min(steps, veloraUiHistoryDepth);
+  veloraUiHistoryDepth -= n;
+  veloraIgnoreHistoryPopstate = true;
+  window.history.go(-n);
+}
+
+function ensureVeloraHistoryRootMarker(): void {
+  try {
+    const prev = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+    if (!(prev as Record<string, unknown>).veloraHistoryRoot) {
+      window.history.replaceState({ ...(prev as object), veloraHistoryRoot: true }, "", window.location.href);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function resolvedIconUrl(raw: string | undefined, base: string): string | null {
   const s = raw?.trim();
   if (!s) return null;
@@ -290,6 +334,303 @@ let state: {
 
 let hls: Hls | null = null;
 let hlsVod: Hls | null = null;
+let primaryPlaybackKeepAliveCleanup: (() => void) | null = null;
+let nodecastStatusPollingCleanup: (() => void) | null = null;
+const NODECAST_STATUS_POLL_MS = 3000;
+
+/** Match Nodecast transcode (HLS): VLC-style UA in `xhrSetup` (proxy may also set upstream UA). */
+const NODECAST_HLS_USER_AGENT = "VLC/3.0.18 LibVLC/3.0.18";
+
+/** hls.js VOD tuned to stay ahead and avoid the “few seconds loaded” wall. */
+const HLS_VOD_CONFIG_BASE = {
+  enableSoftwareAES: true,
+  maxBufferLength: 90,
+  maxMaxBufferLength: 180,
+  maxLoadingDelay: 4,
+  manifestLoadingMaxRetry: 10,
+  levelLoadingMaxRetry: 10,
+  fragLoadingMaxRetry: 10,
+  enableWorker: true,
+  initialLiveManifestSize: 1,
+  backBufferLength: 0,
+  /** Sliding-window transcode playlists are `live`; keep MSE duration unbounded so playback does not “end” early. */
+  liveDurationInfinity: true,
+} as const;
+
+const VOD_STALL_RETRY_DELAY_MS = 2200;
+const VOD_WATCHDOG_TICK_MS = 1000;
+const VOD_WATCHDOG_STALL_MS = 6500;
+const VOD_REMOUNT_MIN_GAP_MS = 2000;
+const VOD_REMOUNT_MAX_ATTEMPTS = 8;
+const VOD_MIN_AHEAD_SECONDS = 3;
+const VOD_BUFFER_STALL_WAKE_MS = 3200;
+const VOD_BUFFER_STALL_EDGE_SECONDS = 0.9;
+const VOD_NUDGE_COOLDOWN_MS = 5000;
+
+let vodPlaybackHelpersCleanup: (() => void) | null = null;
+let vodStallRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let lastVodProxiedUrl: string | null = null;
+let lastVodUpstreamAuth: Record<string, string> | undefined;
+let vodRemountAttempts = 0;
+let vodLastRemountTs = 0;
+
+function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): void {
+  void status;
+  setVodPlayerBufferingVisible(true);
+}
+
+function stopVodFakeLoadingOverlay(): void {
+  setVodPlayerBufferingVisible(false);
+}
+
+function teardownVodPlaybackHelpers(): void {
+  vodPlaybackHelpersCleanup?.();
+  vodPlaybackHelpersCleanup = null;
+  if (vodStallRetryTimer != null) {
+    clearTimeout(vodStallRetryTimer);
+    vodStallRetryTimer = null;
+  }
+}
+
+/** Start playback as soon as the source is attached; use muted only if the browser blocks unmuted play. */
+function playVodAggressive(video: HTMLVideoElement): void {
+  void video.play().catch(() => {
+    const prevMuted = video.muted;
+    video.muted = true;
+    void video.play().catch(() => {
+      video.muted = prevMuted;
+    });
+  });
+}
+
+function vodHlsXhrSetup(
+  xhr: XMLHttpRequest,
+  _url: string,
+  upstreamAuth: Record<string, string> | undefined
+): void {
+  try {
+    xhr.setRequestHeader("User-Agent", NODECAST_HLS_USER_AGENT);
+  } catch {
+    /* Browsers may forbid setting User-Agent; the proxy still uses VLC upstream. */
+  }
+  if (!upstreamAuth) return;
+  for (const [k, v] of Object.entries(upstreamAuth)) {
+    if (typeof v !== "string" || !v.trim()) continue;
+    const lk = k.toLowerCase();
+    if (lk === "user-agent" || lk === "referer" || lk === "referrer") continue;
+    try {
+      xhr.setRequestHeader(k, v);
+    } catch {
+      /* ignore invalid header names */
+    }
+  }
+}
+
+function mountHlsVod(
+  proxied: string,
+  video: HTMLVideoElement,
+  upstreamAuth: Record<string, string> | undefined,
+  opts?: { resumeAt?: number }
+): void {
+  if (hlsVod) {
+    try {
+      hlsVod.destroy();
+    } catch {
+      /* ignore */
+    }
+    hlsVod = null;
+  }
+  hlsVod = new Hls({
+    ...HLS_VOD_CONFIG_BASE,
+    // More stable long playback for Nodecast-style transcode playlists.
+    lowLatencyMode: false,
+    xhrSetup(xhr, url) {
+      vodHlsXhrSetup(xhr, url, upstreamAuth);
+    },
+  });
+  hlsVod.loadSource(proxied);
+  hlsVod.attachMedia(video);
+  try {
+    hlsVod.startLoad(-1);
+  } catch {
+    /* ignore */
+  }
+
+  hlsVod.on(Hls.Events.MANIFEST_PARSED, () => {
+    const resumeAt = opts?.resumeAt;
+    if (resumeAt != null && Number.isFinite(resumeAt) && resumeAt > 0) {
+      try {
+        video.currentTime = Math.max(0, resumeAt);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      hlsVod?.startLoad(-1);
+    } catch {
+      /* ignore */
+    }
+    playVodAggressive(video);
+  });
+
+  hlsVod.on(Hls.Events.ERROR, (_e, data: ErrorData) => {
+    if (!data.fatal) return;
+    if (data.type === ErrorTypes.MEDIA_ERROR) {
+      try {
+        hlsVod?.recoverMediaError();
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
+    // Force HLS to retry loading segments on transient network errors.
+    if (data.type === ErrorTypes.NETWORK_ERROR) {
+      try {
+        hlsVod?.startLoad(-1);
+        return;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (tryRemountVodHls(video)) return;
+    setVodPlayerBufferingVisible(false);
+    if (elNowPlayingVod) {
+      elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
+        `Erreur lecture : ${data.type} / ${String(data.details)}`
+      );
+    }
+  });
+}
+
+function tryRemountVodHls(video: HTMLVideoElement): boolean {
+  if (!hlsVod || !lastVodProxiedUrl || !Hls.isSupported()) return false;
+  const now = Date.now();
+  if (now - vodLastRemountTs < VOD_REMOUNT_MIN_GAP_MS) return false;
+  if (vodRemountAttempts >= VOD_REMOUNT_MAX_ATTEMPTS) return false;
+  vodLastRemountTs = now;
+  vodRemountAttempts++;
+  const resumeAt = Number.isFinite(video.currentTime) ? Math.max(0, video.currentTime) : 0;
+  mountHlsVod(lastVodProxiedUrl, video, lastVodUpstreamAuth, { resumeAt });
+  attachVodPlaybackHelpers(video);
+  return true;
+}
+
+function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
+  teardownVodPlaybackHelpers();
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  let lastProgressTs = Date.now();
+  let lastTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+
+  const forceStartLoad = (): void => {
+    if (!hlsVod) return;
+    try {
+      hlsVod.startLoad(-1);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const updateProgressClock = (): void => {
+    const now = Date.now();
+    const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    if (t > lastTime + 0.02) {
+      lastProgressTs = now;
+      lastTime = t;
+      return;
+    }
+    if (video.seeking) return;
+    const d = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+    if (t >= d) return;
+    if (now - lastProgressTs >= VOD_WATCHDOG_STALL_MS) {
+      setVodPlayerBufferingVisible(true);
+      forceStartLoad();
+      if (!tryRemountVodHls(video)) {
+        forceStartLoad();
+      }
+      lastProgressTs = now;
+    }
+  };
+
+  const cancelStallRetry = (): void => {
+    if (vodStallRetryTimer != null) {
+      clearTimeout(vodStallRetryTimer);
+      vodStallRetryTimer = null;
+    }
+  };
+
+  const scheduleStallRetry = (): void => {
+    if (!hlsVod) return;
+    cancelStallRetry();
+    vodStallRetryTimer = setTimeout(() => {
+      vodStallRetryTimer = null;
+      if (!hlsVod) return;
+      if (video.seeking) return;
+      const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const d = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+      if (t >= d) return;
+      forceStartLoad();
+    }, VOD_STALL_RETRY_DELAY_MS);
+  };
+
+  const onWaiting = (): void => {
+    setVodPlayerBufferingVisible(true);
+    scheduleStallRetry();
+  };
+
+  const onStalled = (): void => {
+    setVodPlayerBufferingVisible(true);
+    scheduleStallRetry();
+  };
+
+  const onError = (): void => {
+    setVodPlayerBufferingVisible(false);
+    cancelStallRetry();
+  };
+
+  const onPlaying = (): void => {
+    stopVodFakeLoadingOverlay();
+    cancelStallRetry();
+    lastProgressTs = Date.now();
+    lastTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    forceStartLoad();
+  };
+
+  const onTimeUpdate = (): void => {
+    const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    if (t > lastTime) lastTime = t;
+    lastProgressTs = Date.now();
+  };
+
+  const onLoadedData = (): void => {
+    forceStartLoad();
+  };
+
+  video.addEventListener("waiting", onWaiting);
+  video.addEventListener("playing", onPlaying);
+  video.addEventListener("stalled", onStalled);
+  video.addEventListener("timeupdate", onTimeUpdate);
+  video.addEventListener("loadeddata", onLoadedData);
+  video.addEventListener("error", onError);
+
+  watchdogTimer = setInterval(() => {
+    if (video.paused) return;
+    updateProgressClock();
+  }, VOD_WATCHDOG_TICK_MS);
+
+  vodPlaybackHelpersCleanup = () => {
+    video.removeEventListener("waiting", onWaiting);
+    video.removeEventListener("playing", onPlaying);
+    video.removeEventListener("stalled", onStalled);
+    video.removeEventListener("timeupdate", onTimeUpdate);
+    video.removeEventListener("loadeddata", onLoadedData);
+    video.removeEventListener("error", onError);
+    cancelStallRetry();
+    if (watchdogTimer != null) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+}
 let activeStreamId: number | null = null;
 
 type VodMovieUiPhase = "list" | "detail";
@@ -411,25 +752,37 @@ function syncPlayerDismissOverlay(): void {
 }
 
 function showPlayerChrome(show: boolean): void {
+  const wasVisible = !elPlayerContainer.classList.contains("hidden");
   if (show) {
     destroyVodPlayer();
+  } else if (wasVisible && !veloraApplyingHistoryPopstate && veloraUiHistoryDepth > 0) {
+    stripVeloraHistorySilently(1);
   }
   elPlayerContainer.classList.toggle("hidden", !show);
   elPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
   elNowPlaying.classList.toggle("hidden", !show);
   elNowPlaying.setAttribute("aria-hidden", show ? "false" : "true");
+  if (show && !wasVisible) {
+    veloraPushNavigationState("player-live");
+  }
   syncPlayerDismissOverlay();
 }
 
 function showVodPlayerChrome(show: boolean): void {
   if (!elVodPlayerContainer || !elNowPlayingVod) return;
+  const wasVisible = !elVodPlayerContainer.classList.contains("hidden");
   if (show) {
     destroyPlayer();
+  } else if (wasVisible && !veloraApplyingHistoryPopstate && veloraUiHistoryDepth > 0) {
+    stripVeloraHistorySilently(1);
   }
   elVodPlayerContainer.classList.toggle("hidden", !show);
   elVodPlayerContainer.setAttribute("aria-hidden", show ? "false" : "true");
   elNowPlayingVod.classList.toggle("hidden", !show);
   elNowPlayingVod.setAttribute("aria-hidden", show ? "false" : "true");
+  if (show && !wasVisible) {
+    veloraPushNavigationState("player-vod");
+  }
   syncPlayerDismissOverlay();
 }
 
@@ -512,6 +865,10 @@ function setPlayerBufferingVisible(visible: boolean): void {
 
 /** Stop HLS / native playback without hiding the player shell (used when switching stream). */
 function teardownPlaybackMedia(): void {
+  primaryPlaybackKeepAliveCleanup?.();
+  primaryPlaybackKeepAliveCleanup = null;
+  nodecastStatusPollingCleanup?.();
+  nodecastStatusPollingCleanup = null;
   if (hls) {
     hls.destroy();
     hls = null;
@@ -526,6 +883,82 @@ function teardownPlaybackMedia(): void {
   elVideo.removeAttribute("title");
   elVideo.load();
   elPlayerContainer.classList.remove("player-container--live-tv");
+}
+
+function attachNodecastStatusPollingForPlayback(): void {
+  nodecastStatusPollingCleanup?.();
+  nodecastStatusPollingCleanup = null;
+  const st = state;
+  if (!st?.nodecastAuthHeaders) return;
+  let stopped = false;
+  let inflight = false;
+  const run = async (): Promise<void> => {
+    if (stopped || inflight) return;
+    inflight = true;
+    try {
+      await pingNodecastSourcesStatus(st.base, st.nodecastAuthHeaders);
+    } catch {
+      /* best-effort polling only */
+    } finally {
+      inflight = false;
+    }
+  };
+  void run();
+  const timer = window.setInterval(() => {
+    void run();
+  }, NODECAST_STATUS_POLL_MS);
+  nodecastStatusPollingCleanup = () => {
+    stopped = true;
+    window.clearInterval(timer);
+  };
+}
+
+function attachPrimaryPlaybackKeepAlive(video: HTMLVideoElement): void {
+  primaryPlaybackKeepAliveCleanup?.();
+  let lastBufferedEnd = 0;
+  let lastBufferAdvanceTs = Date.now();
+  let lastNudgeTs = 0;
+  const forceHungryLoad = (): void => {
+    if (!hls) return;
+    try {
+      hls.startLoad(-1);
+    } catch {
+      /* ignore */
+    }
+  };
+  const onProgress = (): void => {
+    if (video.paused || video.seeking) return;
+    let currentEnd = 0;
+    if (video.buffered && video.buffered.length > 0) {
+      currentEnd = video.buffered.end(video.buffered.length - 1);
+    }
+    const now = Date.now();
+    const edgeMoved = Math.abs(currentEnd - lastBufferedEnd) > 0.01;
+    if (edgeMoved) {
+      lastBufferedEnd = currentEnd;
+      lastBufferAdvanceTs = now;
+    }
+    const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const edgeDelta = currentEnd - t;
+    if (edgeDelta < VOD_MIN_AHEAD_SECONDS) {
+      forceHungryLoad();
+    }
+    const stalledGrowth = now - lastBufferAdvanceTs >= VOD_BUFFER_STALL_WAKE_MS;
+    const canNudge = now - lastNudgeTs >= VOD_NUDGE_COOLDOWN_MS;
+    if (stalledGrowth && edgeDelta <= VOD_BUFFER_STALL_EDGE_SECONDS && canNudge) {
+      forceHungryLoad();
+      try {
+        video.currentTime = Math.max(0, t + 0.1);
+        lastNudgeTs = now;
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  video.addEventListener("progress", onProgress);
+  primaryPlaybackKeepAliveCleanup = () => {
+    video.removeEventListener("progress", onProgress);
+  };
 }
 
 function destroyPlayer(): void {
@@ -543,6 +976,13 @@ function setVodPlayerBufferingVisible(visible: boolean): void {
 
 function teardownVodMedia(): void {
   if (!elVideoVod) return;
+  nodecastStatusPollingCleanup?.();
+  nodecastStatusPollingCleanup = null;
+  teardownVodPlaybackHelpers();
+  vodRemountAttempts = 0;
+  vodLastRemountTs = 0;
+  lastVodProxiedUrl = null;
+  lastVodUpstreamAuth = undefined;
   if (hlsVod) {
     hlsVod.destroy();
     hlsVod = null;
@@ -553,7 +993,9 @@ function teardownVodMedia(): void {
   } catch {
     /* ignore */
   }
+  elVideoVod.preload = "none";
   elVideoVod.removeAttribute("src");
+  elVideoVod.src = "";
   elVideoVod.removeAttribute("title");
   elVideoVod.load();
   elVodPlayerContainer?.classList.remove("player-container--live-tv");
@@ -561,6 +1003,7 @@ function teardownVodMedia(): void {
 
 function destroyVodPlayer(): void {
   teardownVodMedia();
+  stopVodFakeLoadingOverlay();
   setVodPlayerBufferingVisible(false);
   if (elNowPlayingVod) elNowPlayingVod.textContent = "";
   showVodPlayerChrome(false);
@@ -593,6 +1036,7 @@ function playUrl(
 ): void {
   destroyVodPlayer();
   teardownPlaybackMedia();
+  attachNodecastStatusPollingForPlayback();
   setPlayerBufferingVisible(false);
   const proxied = proxiedUrl(url);
   elNowPlaying.innerHTML = nowPlayingLiveMarkup(label);
@@ -635,7 +1079,17 @@ function playUrl(
     hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
+      maxBufferLength: 60,
+      maxMaxBufferLength: 120,
+      manifestLoadingMaxRetry: 12,
+      levelLoadingMaxRetry: 12,
+      fragLoadingMaxRetry: 14,
       xhrSetup(xhr) {
+        try {
+          xhr.setRequestHeader("User-Agent", NODECAST_HLS_USER_AGENT);
+        } catch {
+          /* browser may block User-Agent */
+        }
         if (!upstreamAuth) return;
         for (const [k, v] of Object.entries(upstreamAuth)) {
           if (typeof v !== "string" || !v.trim()) continue;
@@ -650,6 +1104,7 @@ function playUrl(
     hls.loadSource(proxied);
     hls.attachMedia(elVideo);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      attachPrimaryPlaybackKeepAlive(elVideo);
       void elVideo.play().catch(() => {});
     });
     hls.on(Hls.Events.ERROR, (_e, data) => {
@@ -670,69 +1125,34 @@ function playUrl(
 /** Lecteur VOD : `<video>` et instance HLS séparées du direct TV. */
 function playVodUrl(url: string, label: string, upstreamAuth?: Record<string, string>): void {
   if (!elVideoVod || !elNowPlayingVod) return;
+  setVodPlayerBufferingVisible(true);
   teardownVodMedia();
-  setVodPlayerBufferingVisible(false);
+  attachNodecastStatusPollingForPlayback();
+  elVideoVod.preload = "metadata";
+  elVideoVod.crossOrigin = "anonymous";
   const proxied = proxiedUrl(url);
+  lastVodProxiedUrl = proxied;
+  lastVodUpstreamAuth = upstreamAuth;
+  vodRemountAttempts = 0;
+  vodLastRemountTs = 0;
   elNowPlayingVod.innerHTML = nowPlayingLiveMarkup(label);
   showVodPlayerChrome(true);
 
-  const hasUpstreamAuth = Boolean(
-    upstreamAuth &&
-      Object.values(upstreamAuth).some((v) => typeof v === "string" && v.trim())
-  );
-
   if (urlLooksLikeProgressiveMedia(url) || urlLooksLikeProgressiveMedia(proxied)) {
     elVideoVod.src = proxied;
-    elVideoVod.onerror = () => {
-      elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
-        "Lecture impossible (codec non pris en charge ou flux refusé)."
-      );
-    };
-    void elVideoVod.play().catch(() => {});
-    return;
-  }
-
-  if (
-    elVideoVod.canPlayType("application/vnd.apple.mpegurl") &&
-    !hasUpstreamAuth &&
-    urlLooksLikeHls(url)
-  ) {
-    elVideoVod.src = proxied;
-    void elVideoVod.play().catch(() => {});
+    attachVodPlaybackHelpers(elVideoVod);
+    playVodAggressive(elVideoVod);
     return;
   }
 
   if (Hls.isSupported()) {
-    hlsVod = new Hls({
-      enableWorker: true,
-      lowLatencyMode: false,
-      xhrSetup(xhr) {
-        if (!upstreamAuth) return;
-        for (const [k, v] of Object.entries(upstreamAuth)) {
-          if (typeof v !== "string" || !v.trim()) continue;
-          try {
-            xhr.setRequestHeader(k, v);
-          } catch {
-            /* ignore invalid header names */
-          }
-        }
-      },
-    });
-    hlsVod.loadSource(proxied);
-    hlsVod.attachMedia(elVideoVod);
-    hlsVod.on(Hls.Events.MANIFEST_PARSED, () => {
-      void elVideoVod.play().catch(() => {});
-    });
-    hlsVod.on(Hls.Events.ERROR, (_e, data) => {
-      if (data.fatal) {
-        elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
-          `Erreur lecture : ${data.type} / ${String(data.details)}`
-        );
-      }
-    });
+    mountHlsVod(proxied, elVideoVod, upstreamAuth);
+    attachVodPlaybackHelpers(elVideoVod);
+    playVodAggressive(elVideoVod);
     return;
   }
 
+  setVodPlayerBufferingVisible(false);
   elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
     "HLS non pris en charge dans ce navigateur."
   );
@@ -1206,6 +1626,7 @@ function renderCatalogPosterGrid(streams: LiveStream[], tab: CatalogMediaTab): v
       activeStreamId = null;
       renderPackageChannelList();
       syncCatalogBackButtonLabel();
+      veloraPushNavigationState("vod-detail");
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
 
@@ -1390,6 +1811,7 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
   btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
   btnWatch.addEventListener("click", () => {
     activeStreamId = s.stream_id;
+    startVodFakeLoadingOverlay(tab === "series" ? "Préparation de l’épisode…" : "Préparation du film…");
     if (tab === "series") syncSeriesEpisodePlaybackHighlight();
     btnWatch.classList.add("hidden");
     void (async () => {
@@ -1513,6 +1935,7 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
               container_extension: ep.containerExtension,
             };
             activeStreamId = ep.episodeStreamId;
+            startVodFakeLoadingOverlay("Préparation de l’épisode…");
             syncSeriesEpisodePlaybackHighlight();
             void playStreamByMode(epStream);
             window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1983,6 +2406,96 @@ elToggleAdminUi?.addEventListener("change", () => {
 });
 
 window.addEventListener("popstate", () => {
+  if (veloraIgnoreHistoryPopstate) {
+    veloraIgnoreHistoryPopstate = false;
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  const appEl = document.querySelector(".app");
+  if (appEl?.classList.contains("hidden")) {
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  const liveOpen = !elPlayerContainer.classList.contains("hidden");
+  const vodOpen = Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
+
+  if (liveOpen) {
+    veloraApplyingHistoryPopstate = true;
+    activeStreamId = null;
+    destroyPlayer();
+    veloraApplyingHistoryPopstate = false;
+    veloraUiHistoryDepth = Math.max(0, veloraUiHistoryDepth - 1);
+    syncSeriesEpisodePlaybackHighlight();
+    syncSeriesDetailEpisodePlayingLayout();
+    if (state && uiShell === "content" && uiAdminPackageId != null) {
+      renderPackageChannelList();
+    }
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  if (vodOpen) {
+    veloraApplyingHistoryPopstate = true;
+    activeStreamId = null;
+    destroyVodPlayer();
+    veloraApplyingHistoryPopstate = false;
+    veloraUiHistoryDepth = Math.max(0, veloraUiHistoryDepth - 1);
+    syncSeriesEpisodePlaybackHighlight();
+    syncSeriesDetailEpisodePlayingLayout();
+    if (state && uiShell === "content" && uiAdminPackageId != null) {
+      renderPackageChannelList();
+    }
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  if (uiShell === "content" && uiTab === "movies" && vodMovieUiPhase === "detail") {
+    vodMovieUiPhase = "list";
+    vodDetailStream = null;
+    veloraUiHistoryDepth = Math.max(0, veloraUiHistoryDepth - 1);
+    if (state && uiAdminPackageId != null) {
+      renderPackageChannelList();
+    }
+    syncCatalogBackButtonLabel();
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  if (uiShell === "content" && uiTab === "series" && seriesUiPhase === "detail") {
+    seriesUiPhase = "list";
+    seriesDetailStream = null;
+    veloraUiHistoryDepth = Math.max(0, veloraUiHistoryDepth - 1);
+    if (state && uiAdminPackageId != null) {
+      renderPackageChannelList();
+    }
+    syncCatalogBackButtonLabel();
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
+  if (uiShell === "content" && uiAdminPackageId != null) {
+    veloraUiHistoryDepth = Math.max(0, veloraUiHistoryDepth - 1);
+    applyPackagesShellUi();
+    tryConsumeAdminAccessFromUrl();
+    syncAdminSettingsButton();
+    syncSettingsFromUrl();
+    return;
+  }
+
   tryConsumeAdminAccessFromUrl();
   syncAdminSettingsButton();
   syncSettingsFromUrl();
@@ -2783,16 +3296,20 @@ function openAdminPackage(packageId: string): void {
   syncPlayerDismissOverlay();
   syncMainInPackageClass();
   resetVeloraMainScroll();
+  veloraPushNavigationState("package");
 }
 
-/** Grille bouquets : conserve l’onglet (Live / Films / Séries). */
-function showPackagesShell(): void {
+/** Retour catalogue bouquets : état UI uniquement (sans synchroniser l’historique). */
+function applyPackagesShellUi(): void {
   activeStreamId = null;
   vodMovieUiPhase = "list";
   vodDetailStream = null;
   seriesUiPhase = "list";
   seriesDetailStream = null;
+  veloraApplyingHistoryPopstate = true;
+  destroyPlayer();
   destroyVodPlayer();
+  veloraApplyingHistoryPopstate = false;
   uiShell = "packages";
   uiAdminPackageId = null;
   setTabsActive(uiTab);
@@ -2809,6 +3326,13 @@ function showPackagesShell(): void {
   syncCatalogBackButtonLabel();
   syncPlayerDismissOverlay();
   syncMainInPackageClass();
+}
+
+/** Grille bouquets : conserve l’onglet (Live / Films / Séries). */
+function showPackagesShell(): void {
+  const pendingHist = veloraUiHistoryDepth;
+  applyPackagesShellUi();
+  stripVeloraHistorySilently(pendingHist);
 }
 
 function goLiveHome(): void {
@@ -3626,7 +4150,6 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
 
   if (state.mode === "nodecast") {
     if (isVodFilm) {
-      setVodPlayerBufferingVisible(true);
       showVodPlayerChrome(true);
       if (elNowPlayingVod) {
         elNowPlayingVod.innerHTML = nowPlayingLiveMarkup(displayChannelName(s.name));
@@ -3634,10 +4157,12 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
       let resolved: string | null = null;
       try {
         resolved = await resolveNodecastVodStreamUrl(state.base, s, state.nodecastAuthHeaders);
-      } finally {
-        setVodPlayerBufferingVisible(false);
+      } catch {
+        resolved = null;
       }
       if (!resolved) {
+        setVodPlayerBufferingVisible(false);
+        stopVodFakeLoadingOverlay();
         if (elNowPlayingVod) {
           elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
             "Impossible de résoudre l’URL de ce film (proxy VOD Nodecast)."
@@ -3648,6 +4173,8 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
         return;
       }
       if (!sameOrigin(resolved, state.base)) {
+        setVodPlayerBufferingVisible(false);
+        stopVodFakeLoadingOverlay();
         if (elNowPlayingVod) {
           elNowPlayingVod.innerHTML = nowPlayingErrorMarkup(
             "URL de lecture externe bloquée ; proxy requis."
@@ -3670,6 +4197,8 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
         seriesDetailStream.nodecast_source_id === s.nodecast_source_id &&
         seriesDetailStream.stream_id !== s.stream_id;
       if (!okFilmDetail && !okSeriesEpisode) {
+        setVodPlayerBufferingVisible(false);
+        stopVodFakeLoadingOverlay();
         if (s.nodecast_series_episode) {
           activeStreamId = null;
           syncSeriesEpisodePlaybackHighlight();
@@ -3805,6 +4334,7 @@ async function connect(): Promise<void> {
     goLiveHome();
     elLoginPanel.classList.add("hidden");
     elMain.classList.remove("hidden");
+    ensureVeloraHistoryRootMarker();
     syncAdminSettingsButton();
     setLoginStatus("");
   } catch (e) {
@@ -3812,6 +4342,7 @@ async function connect(): Promise<void> {
     setLoginStatus(msg, true);
     if (envAutoConnectConfigured()) {
       elMain.classList.remove("hidden");
+      ensureVeloraHistoryRootMarker();
       elLoginPanel.classList.add("hidden");
       elHeaderLoginOnly?.classList.add("hidden");
       elPackagesView.classList.remove("hidden");
@@ -3828,6 +4359,8 @@ async function connect(): Promise<void> {
 }
 
 function disconnect(): void {
+  veloraUiHistoryDepth = 0;
+  veloraApplyingHistoryPopstate = true;
   setChannelNamePrefixesFromDatabase(null);
   setChannelHideNeedlesFromDatabase(null);
   adminConfig = { ...EMPTY_ADMIN_CONFIG };
@@ -3850,6 +4383,7 @@ function disconnect(): void {
   uiAdminPackageId = null;
   destroyPlayer();
   destroyVodPlayer();
+  veloraApplyingHistoryPopstate = false;
   elDynamicList.classList.remove("item-list--vod-vertical", "item-list--vod-film-detail");
   elContentView.classList.remove("content-view--vod-film-detail");
   elDynamicList.innerHTML = "";
@@ -3917,14 +4451,18 @@ elBtnBackHome.addEventListener("click", () => {
     vodMovieUiPhase = "list";
     vodDetailStream = null;
     closeVodPlayerUserAction();
+    stripVeloraHistorySilently(1);
     syncCatalogBackButtonLabel();
+    if (state && uiAdminPackageId != null) renderPackageChannelList();
     return;
   }
   if (uiTab === "series" && seriesUiPhase === "detail" && uiShell === "content") {
     seriesUiPhase = "list";
     seriesDetailStream = null;
     closeVodPlayerUserAction();
+    stripVeloraHistorySilently(1);
     syncCatalogBackButtonLabel();
+    if (state && uiAdminPackageId != null) renderPackageChannelList();
     return;
   }
   showPackagesShell();
@@ -3970,6 +4508,8 @@ function toggleVideoPlayPauseVod(ev: MouseEvent): void {
 }
 
 elVideoVod?.addEventListener("click", toggleVideoPlayPauseVod);
+window.addEventListener("pagehide", teardownVodMedia);
+window.addEventListener("beforeunload", teardownVodMedia);
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.activeElement?.closest(".login-panel")) {

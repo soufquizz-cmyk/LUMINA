@@ -123,10 +123,6 @@ const PROXY_HOP_BY_HOP = new Set([
   "transfer-encoding",
   "content-encoding",
   "set-cookie",
-  "etag",
-  "cache-control",
-  "expires",
-  "last-modified",
 ]);
 
 function copyUpstreamHeadersToClient(upstream: Response, res: ServerResponse): void {
@@ -139,6 +135,18 @@ function copyUpstreamHeadersToClient(upstream: Response, res: ServerResponse): v
       /* ignore invalid header names */
     }
   });
+}
+
+function isLikelyMediaRequest(targetUrl: string, contentType: string): boolean {
+  const path = new URL(targetUrl).pathname.toLowerCase();
+  const ct = contentType.toLowerCase();
+  return (
+    /\.m3u8(?:$|\?)/i.test(path) ||
+    /\.(ts|m4s|m4v|mp4|aac|mp3|webm|mkv)(?:$|\?)/i.test(path) ||
+    ct.includes("mpegurl") ||
+    ct.startsWith("video/") ||
+    ct.startsWith("audio/")
+  );
 }
 
 /** Avoid :80 / :443 in headers; some CDNs treat them as different from default. */
@@ -282,7 +290,7 @@ function buildUpstreamHeaders(
     "Accept-Language": "en-US,en;q=0.9",
     Referer: referer,
     // IPTV providers often whitelist VLC-like UAs and block browser UAs.
-    "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
+    "User-Agent": "VLC/3.0.18 LibVLC/3.0.18",
   };
   const cookie = cookieHeaderForUpstreamUrl(targetUrl);
   if (cookie) {
@@ -292,12 +300,24 @@ function buildUpstreamHeaders(
     h.Origin = origin;
   }
   const range = req.headers.range;
-  if (typeof range === "string" && !targetIsTsUnderHls) {
+  const suppressRangeToUpstream =
+    /\.m3u8(?:$|\?)/i.test(targetPath) ||
+    /\.(ts|m4s)(?:$|\?)/i.test(targetPath) ||
+    targetIsTsUnderHls;
+  if (typeof range === "string" && !suppressRangeToUpstream) {
     h.Range = range;
   }
   const authorization = req.headers.authorization;
   if (typeof authorization === "string" && authorization.trim()) {
     h.Authorization = authorization;
+  }
+  const ifNoneMatch = req.headers["if-none-match"];
+  if (typeof ifNoneMatch === "string" && ifNoneMatch.trim()) {
+    h["If-None-Match"] = ifNoneMatch;
+  }
+  const ifModifiedSince = req.headers["if-modified-since"];
+  if (typeof ifModifiedSince === "string" && ifModifiedSince.trim()) {
+    h["If-Modified-Since"] = ifModifiedSince;
   }
   return {
     headers: h,
@@ -464,6 +484,9 @@ function proxyMiddleware() {
         const rewritten = rewriteM3u8(text, q);
         res.statusCode = 200;
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
         res.end(rewritten);
         return;
       }
@@ -523,6 +546,11 @@ function proxyMiddleware() {
       ) {
         res.statusCode = upstream.status;
         copyUpstreamHeadersToClient(upstream, res);
+        if (isLikelyMediaRequest(q, ct)) {
+          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
         res.end();
         return;
       }
@@ -546,6 +574,11 @@ function proxyMiddleware() {
       });
       res.statusCode = upstream.status;
       copyUpstreamHeadersToClient(upstream, res);
+      if (isLikelyMediaRequest(q, ct)) {
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+      }
       const webBody = upstream.body as import("stream/web").ReadableStream<Uint8Array>;
       const nodeReadable = Readable.fromWeb(webBody);
       await pipeline(nodeReadable, res);

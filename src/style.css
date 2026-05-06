@@ -1967,6 +1967,33 @@ a.topbar__admin-link {
   overflow-y: auto;
 }
 
+/* Mobile: sticky header → sidebar (tabs + pays) → catalogue ; desktop → grid (voir media 1024px) */
+.vel-dashboard {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.main--velora .vel-sidebar {
+  flex-shrink: 0;
+}
+
+.main--velora .vel-sidebar {
+  padding-bottom: 0.85rem;
+}
+
+.main--velora .vel-header__country {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.main--velora .vel-header__country .country-select {
+  width: 100%;
+  max-width: 100%;
+}
+
 .vel-sticky-top {
   position: sticky;
   top: 0;
@@ -2077,6 +2104,8 @@ a.topbar__admin-link {
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .vel-settings-btn {
@@ -2320,7 +2349,7 @@ a.topbar__admin-link {
  */
 #dynamic-list.item-list.item-list--vod-vertical {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.5rem), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
   gap: clamp(0.65rem, 2vw, 1.05rem);
   padding: 0 clamp(0.35rem, 2.5vw, 1.25rem) clamp(1.35rem, 3.5vw, 2.5rem);
   align-items: start;
@@ -2331,28 +2360,9 @@ a.topbar__admin-link {
   min-width: 0;
 }
 
-@media (min-width: 380px) {
+@media (max-width: 379px) {
   #dynamic-list.item-list.item-list--vod-vertical {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 7.25rem), 1fr));
-  }
-}
-
-@media (min-width: 600px) {
-  #dynamic-list.item-list.item-list--vod-vertical {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 8.5rem), 1fr));
-    gap: clamp(0.75rem, 2.2vw, 1.2rem);
-  }
-}
-
-@media (min-width: 900px) {
-  #dynamic-list.item-list.item-list--vod-vertical {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.25rem), 1fr));
-  }
-}
-
-@media (min-width: 1200px) {
-  #dynamic-list.item-list.item-list--vod-vertical {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2932,6 +2942,8 @@ a.topbar__admin-link {
 
 .vel-vod-detail__watch {
   margin-top: 0.5rem;
+  margin-left: auto;
+  margin-right: auto;
   width: 100%;
   max-width: 20rem;
   padding: 0.85rem 1.25rem;
@@ -2971,6 +2983,10 @@ a.topbar__admin-link {
   width: 100%;
   height: 100%;
   display: block;
+  object-fit: contain;
+}
+
+#video-vod {
   object-fit: contain;
 }
 
@@ -3059,7 +3075,7 @@ a.topbar__admin-link {
   justify-content: center;
   gap: 12px;
   padding: 0 1.25rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.85rem;
   flex-wrap: wrap;
 }
 
@@ -3068,6 +3084,9 @@ a.topbar__admin-link {
 }
 
 .main--velora .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(255, 255, 255, 0.05);
   border: none;
   color: var(--vel-muted);
@@ -3122,9 +3141,15 @@ a.topbar__admin-link {
 
 .grid.vel-packages {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
   gap: 0.85rem;
   padding: 0 1.25rem;
+}
+
+@media (max-width: 379px) {
+  .grid.vel-packages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .grid.vel-packages.hidden {
@@ -3601,6 +3626,18 @@ a.topbar__admin-link {
   padding-bottom: 2rem;
   width: 100%;
   min-width: 0;
+}
+
+/* Grille chaînes LIVE (colonnes multiples ; les modes VOD gardent leurs règles dédiées) */
+.main--velora #dynamic-list.item-list:not(.item-list--vod-vertical):not(.item-list--vod-film-detail) {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 379px) {
+  .main--velora #dynamic-list.item-list:not(.item-list--vod-vertical):not(.item-list--vod-film-detail) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .media-item {
@@ -4665,12 +4702,6 @@ a.topbar__admin-link {
   font-weight: 600;
 }
 
-@media (min-width: 600px) {
-  .grid.vel-packages {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
 /* ——— Pays admin (URL `?settings=1`) ——— */
 .settings-shell.hidden {
   display: none !important;
@@ -4821,5 +4852,497 @@ a.topbar__admin-link {
   margin: 0;
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+/* ═══ Velora — bureau dashboard (≥1024px) ═══ */
+@media (min-width: 1024px) {
+  :root {
+    --vel-sidebar-w: 228px;
+  }
+
+  /* Dégradés shell : couvrent la fenêtre lors du défilement */
+  .main--velora[data-vel-shell-bg] {
+    background-attachment: fixed;
+  }
+
+  .vel-dashboard {
+    display: grid;
+    grid-template-columns: var(--vel-sidebar-w) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    align-items: stretch;
+  }
+
+  .vel-sidebar {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    z-index: 1002;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 1rem;
+    border-right: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(12, 10, 22, 0.48);
+    backdrop-filter: blur(20px) saturate(145%);
+    -webkit-backdrop-filter: blur(20px) saturate(145%);
+    box-shadow: 6px 0 40px rgba(0, 0, 0, 0.28);
+  }
+
+  .vel-sticky-top {
+    grid-column: 2;
+    grid-row: 1;
+    margin-bottom: 0.5rem;
+  }
+
+  .vel-body {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 0;
+    padding-bottom: 1.5rem;
+  }
+
+  /* Navigation latérale */
+  .main--velora .vel-sidebar .nav-tabs {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 0.38rem;
+    padding: 1rem 0.85rem 0.85rem;
+    margin-bottom: 0;
+  }
+
+  .main--velora .vel-sidebar .tab {
+    width: 100%;
+    justify-content: center;
+    padding: 0.48rem 0.72rem;
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    border-radius: 11px;
+    border-bottom: 3px solid transparent;
+    transition:
+      transform 0.15s ease,
+      filter 0.15s ease,
+      box-shadow 0.2s ease,
+      border-color 0.18s ease;
+  }
+
+  .main--velora .vel-sidebar .tab:not(.active):hover {
+    filter: brightness(1.12);
+    transform: translateY(-1px);
+  }
+
+  .main--velora .vel-sidebar .tab.active {
+    border-bottom-color: color-mix(in srgb, var(--vel-primary, #8a2be2) 72%, rgba(255, 255, 255, 0.35));
+    box-shadow:
+      0 0 22px color-mix(in srgb, var(--vel-accent-glow, rgba(138, 43, 226, 0.35)) 55%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, var(--vel-primary, #8a2be2) 40%, transparent);
+  }
+
+  .main--velora .vel-header__right {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.72rem;
+    max-width: min(520px, 52vw);
+  }
+
+  .main--velora .vel-header__country {
+    flex: 1 1 auto;
+    min-width: 8rem;
+    max-width: 15rem;
+  }
+
+  .main--velora .vel-header__country .country-select {
+    width: 100%;
+    padding: 0.34rem 0.55rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    border-radius: 10px;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease,
+      background 0.15s ease;
+  }
+
+  .main--velora .vel-header__country .country-select:hover {
+    box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.32);
+  }
+
+  /* Barre du haut : échelle souris */
+  .vel-header {
+    padding: 0.42rem 1rem 0.48rem;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .vel-brand {
+    font-size: 2.6rem;
+    letter-spacing: -0.045em;
+  }
+
+  .vel-settings-btn,
+  .vel-logout {
+    font-size: 0.66rem;
+    padding: 0.26rem 0.46rem;
+    border-radius: 8px;
+    transition:
+      border-color 0.15s ease,
+      color 0.15s ease,
+      transform 0.12s ease;
+  }
+
+  .vel-settings-btn:hover,
+  .vel-logout:hover {
+    transform: translateY(-1px);
+  }
+
+  .vel-package-toolbar-sticky {
+    width: 100%;
+    max-width: none;
+    margin-top: 0.2rem;
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  .vel-curate-status {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* Cartes : glass léger */
+  .main--velora .vel-package-card {
+    border-radius: 16px;
+    backdrop-filter: blur(10px);
+    background-color: color-mix(in srgb, var(--vel-surface) 85%, transparent);
+    transition:
+      transform 0.18s ease,
+      border-color 0.18s ease,
+      box-shadow 0.18s ease;
+  }
+
+  .main--velora .vel-package-card:hover {
+    transform: translateY(-3px);
+  }
+
+  .main--velora .media-item {
+    padding: 5px 9px 5px 5px;
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+    background: color-mix(in srgb, var(--vel-surface) 88%, transparent);
+  }
+
+  .main--velora .media-item__thumb {
+    width: 42px;
+    height: 42px;
+    border-radius: 9px;
+  }
+
+  .main--velora .media-info h4 {
+    font-size: 0.78rem;
+  }
+
+  /* Grilles catalogue */
+  .grid.vel-packages,
+  #dynamic-list.item-list.item-list--vod-vertical {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  .main--velora #dynamic-list.item-list:not(.item-list--vod-vertical):not(.item-list--vod-film-detail) {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .main--velora #dynamic-list.item-list:not(.item-list--vod-vertical):not(.item-list--vod-film-detail) .vel-media-item-row {
+    align-items: center;
+    padding: 0.35rem 0.45rem;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--vel-surface, #1a1520) 72%, rgba(6, 5, 12, 0.85));
+    border: 1px solid color-mix(in srgb, var(--vel-primary, #8a2be2) 14%, rgba(255, 255, 255, 0.08));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .main--velora
+    #dynamic-list.item-list:not(.item-list--vod-vertical):not(.item-list--vod-film-detail)
+    .vel-media-item-tools {
+    justify-content: center;
+    align-self: center;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .main--velora:has(#content-view.content-view--vod-film-detail:not(.hidden))
+    .vel-package-toolbar-sticky
+    .vel-content-toolbar {
+    background: transparent;
+    border-bottom: 1px solid color-mix(in srgb, var(--vel-primary, #8a2be2) 24%, rgba(255, 255, 255, 0.08));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__watch.primary {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    max-width: 360px;
+    width: min(100%, 360px);
+    min-height: 3.15rem;
+    font-size: 1.03rem;
+    border-radius: 14px !important;
+    transition:
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      filter 0.2s ease,
+      box-shadow 0.22s ease;
+  }
+
+  #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__watch.primary:hover {
+    transform: scale(1.02);
+    filter: brightness(1.1);
+    box-shadow:
+      0 12px 36px rgba(0, 0, 0, 0.42),
+      0 0 36px color-mix(in srgb, var(--vel-accent-glow, rgba(138, 43, 226, 0.35)) 70%, transparent);
+  }
+
+  .main--velora .player-container .video-wrapper,
+  .main--velora .player-container--vod .video-wrapper {
+    background: radial-gradient(
+        ellipse 120% 90% at 50% 45%,
+        color-mix(in srgb, var(--vel-primary, #8a2be2) 12%, #07060d) 0%,
+        #05040a 62%,
+        #020108 100%
+      ),
+      linear-gradient(180deg, #0e0c14 0%, #06050c 100%);
+  }
+
+  .main--velora #video {
+    object-fit: contain;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+  }
+
+  .main--velora #video-vod {
+    object-fit: contain;
+    object-position: center;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+  }
+
+  #content-view {
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  /* Lecteur : zone large par défaut */
+  .main--velora:has(#player-container:not(.hidden)) #player-container.player-container {
+    width: calc(100% - 1.35rem);
+    max-width: min(1120px, 100%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .main--velora:has(#vod-player-container:not(.hidden)) #vod-player-container.player-container--vod {
+    width: calc(100% - 1.35rem);
+    max-width: min(1120px, 100%);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Mode « théâtre » : catalogue ouvert + lecture */
+  .main--velora:has(#content-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container.player-container {
+    max-width: none;
+    width: calc(100% - 1rem);
+  }
+
+  .main--velora:has(#content-view:not(.hidden)):has(#vod-player-container:not(.hidden))
+    #vod-player-container.player-container--vod {
+    max-width: none;
+    width: calc(100% - 1rem);
+  }
+
+  .main--velora:has(#content-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container .video-wrapper,
+  .main--velora:has(#content-view:not(.hidden)):has(#vod-player-container:not(.hidden))
+    #vod-player-container
+    .video-wrapper {
+    max-height: min(52vh, 580px);
+  }
+
+  /* Mini lecteur (PiP) pendant la grille des bouquets */
+  .main--velora:has(#packages-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container.player-container {
+    position: fixed;
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    left: auto;
+    width: min(360px, calc(100vw - var(--vel-sidebar-w) - 2.5rem));
+    max-width: none;
+    margin: 0;
+    z-index: 1100;
+    border-radius: 14px;
+    box-shadow:
+      0 16px 48px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  .main--velora:has(#packages-view:not(.hidden)):has(#vod-player-container:not(.hidden))
+    #vod-player-container.player-container--vod {
+    position: fixed;
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    left: auto;
+    width: min(360px, calc(100vw - var(--vel-sidebar-w) - 2.5rem));
+    max-width: none;
+    margin: 0;
+    z-index: 1100;
+    border-radius: 14px;
+    box-shadow:
+      0 16px 48px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
+
+  .main--velora:has(#packages-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container .video-wrapper,
+  .main--velora:has(#packages-view:not(.hidden)):has(#vod-player-container:not(.hidden))
+    #vod-player-container
+    .video-wrapper {
+    max-height: none;
+  }
+
+  /* Admin pays — fenêtre centrée, fond flou */
+  #settings-shell:not(.hidden).countries-admin-page {
+    position: fixed;
+    inset: 0;
+    overflow: auto;
+    z-index: 5000;
+    padding: 1.5rem 1rem 2.5rem;
+    max-width: none;
+    margin: 0;
+    background: rgba(5, 4, 10, 0.52);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  #settings-shell .countries-admin-head {
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+
+  #settings-shell .countries-admin-main {
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 1.35rem 1.5rem 2rem;
+    border-radius: calc(var(--radius) + 4px);
+    background: linear-gradient(165deg, rgba(255, 255, 255, 0.05) 0%, transparent 42%),
+      rgba(16, 14, 24, 0.72);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 28px 72px rgba(0, 0, 0, 0.5);
+  }
+
+  #settings-shell .countries-admin-main .panel {
+    background: rgba(10, 9, 16, 0.45);
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  #settings-shell .countries-admin-quit,
+  #settings-shell .countries-admin-cancel,
+  #settings-shell button.primary {
+    font-size: 0.8rem;
+    padding: 0.38rem 0.72rem;
+    transition:
+      filter 0.15s ease,
+      border-color 0.15s ease,
+      transform 0.12s ease;
+  }
+
+  #settings-shell .countries-admin-quit:hover,
+  #settings-shell .countries-admin-cancel:hover {
+    transform: translateY(-1px);
+  }
+
+  #settings-shell .countries-admin-main input,
+  #settings-shell .countries-admin-main select {
+    font-size: 0.84rem;
+    padding: 0.42rem 0.55rem;
+  }
+
+  /* Dialogues admin — largeur max 800px + backdrop net */
+  dialog.admin-add-package-dialog,
+  dialog.admin-channel-assign-dialog,
+  dialog.admin-add-channels-dialog {
+    margin: auto;
+    width: calc(100vw - 3rem);
+    max-width: 800px;
+    border: none;
+    background: transparent;
+  }
+
+  dialog.admin-add-package-dialog::backdrop,
+  dialog.admin-channel-assign-dialog::backdrop,
+  dialog.admin-add-channels-dialog::backdrop {
+    background: rgba(4, 3, 10, 0.62);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .admin-add-package-dialog__panel,
+  .admin-cover-dialog__panel,
+  .admin-add-channels-dialog__panel {
+    width: 100%;
+    max-width: none;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .admin-add-package-dialog__select,
+  .admin-add-package-dialog__input,
+  .cover-upload__btn {
+    font-size: 0.82rem;
+  }
+
+  .main--velora button.primary {
+    transition:
+      filter 0.15s ease,
+      transform 0.12s ease;
+  }
+
+  .main--velora button.primary:hover {
+    transform: translateY(-1px);
+  }
+
+  .main--velora button:not(.primary):not(:disabled):hover {
+    filter: brightness(1.06);
+  }
+
+  dialog button.primary:hover {
+    transform: translateY(-1px);
+  }
+
+  .main--velora .back-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .main--velora .vel-admin-add-channels-btn:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+  }
+
+  .vel-pills .cat-pill:hover {
+    filter: brightness(1.08);
+  }
 }
 

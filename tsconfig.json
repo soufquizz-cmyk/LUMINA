@@ -14,5 +14,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "api"]
+  "include": ["src", "api"],
+  "exclude": ["src/index.js"]
 }

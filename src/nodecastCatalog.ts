@@ -80,6 +80,35 @@ const PLAYABLE_PROBE_FETCH_MS = 18_000;
 const TRANSCODE_CACHE_MS = 3 * 60 * 1000;
 const transcodePlaylistCache = new Map<string, { expires: number; playlistUrl: string }>();
 const transcodeInflight = new Map<string, Promise<string | null>>();
+const MAX_PARALLEL_TRANSCODE_SESSION_POSTS = 1;
+let activeTranscodeSessionPosts = 0;
+const transcodeSessionPostWaiters: Array<() => void> = [];
+
+async function withTranscodeSessionPostSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (activeTranscodeSessionPosts >= MAX_PARALLEL_TRANSCODE_SESSION_POSTS) {
+    await new Promise<void>((resolve) => {
+      transcodeSessionPostWaiters.push(resolve);
+    });
+  }
+  activeTranscodeSessionPosts += 1;
+  try {
+    return await run();
+  } finally {
+    activeTranscodeSessionPosts = Math.max(0, activeTranscodeSessionPosts - 1);
+    const next = transcodeSessionPostWaiters.shift();
+    if (next) next();
+  }
+}
+
+function isRateLimitLikeErrorMessage(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    /\b509\b/.test(lower) ||
+    lower.includes("rate limit") ||
+    lower.includes("too many request") ||
+    lower.includes("bandwidth limit")
+  );
+}
 
 export async function fetchProxiedJson<T>(url: string): Promise<T> {
   return fetchProxiedJsonWithInit<T>(url);
@@ -376,6 +405,11 @@ function hrefLooksLikeProgressiveContainer(href: string): boolean {
   return /\.(mp4|mkv|webm|mov|avi|m4v)(\?|#|&|$)/i.test(s);
 }
 
+function hrefLooksLikeHlsPlaylist(href: string): boolean {
+  const s = innermostHttpStreamTarget(href);
+  return /\.m3u8(\?|#|&|$)/i.test(s) || /[?&]container=m3u8(?:&|$)/i.test(s);
+}
+
 const NODECAST_SETTINGS_CACHE_MS = 5 * 60 * 1000;
 let nodecastProbeUaCache: { base: string; ua: string; exp: number } | null = null;
 
@@ -463,17 +497,20 @@ async function createNodecastTranscodeUrl(
     const postBody = JSON.stringify({ url: upstreamUrl });
     const sessionUrl = `${nodecastBase}/api/transcode/session`;
 
-    for (let round = 0; round < 2; round++) {
+    const attemptDelaysMs = [0, 4_000, 8_000];
+    for (let round = 0; round < attemptDelaysMs.length; round++) {
       if (round > 0) {
-        await new Promise((r) => setTimeout(r, 2800));
+        await new Promise((r) => setTimeout(r, attemptDelaysMs[round]));
       }
       try {
-        const payload = await fetchProxiedJsonWithInit<unknown>(sessionUrl, {
-          method: "POST",
-          headers: postHeaders,
-          body: postBody,
-          timeoutMs: TRANSCODE_SESSION_FETCH_MS,
-        });
+        const payload = await withTranscodeSessionPostSlot(async () =>
+          fetchProxiedJsonWithInit<unknown>(sessionUrl, {
+            method: "POST",
+            headers: postHeaders,
+            body: postBody,
+            timeoutMs: TRANSCODE_SESSION_FETCH_MS,
+          })
+        );
         const fromPlaylist = playlistUrlFromNodecastTranscodeResponse(payload, nodecastBase);
         if (fromPlaylist) {
           transcodePlaylistCache.set(upstreamUrl, {
@@ -495,8 +532,11 @@ async function createNodecastTranscodeUrl(
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (isRateLimitLikeErrorMessage(msg)) {
+          break;
+        }
         const isPlaylistTimeout = msg.includes("Playlist not generated in time");
-        if (!isPlaylistTimeout || round === 1) {
+        if (!isPlaylistTimeout || round === attemptDelaysMs.length - 1) {
           break;
         }
       }
@@ -781,6 +821,16 @@ async function discoverXtreamSourceIdsInternal(
     }
   }
   return [...sourceIds];
+}
+
+export async function pingNodecastSourcesStatus(
+  base: string,
+  nodecastAuthHeaders?: Record<string, string>
+): Promise<void> {
+  await fetchProxiedJsonWithInit<unknown>(`${base}/api/sources/status`, {
+    headers: nodecastAuthHeaders,
+    timeoutMs: 8_000,
+  });
 }
 
 function mapXtreamCategoryRow(raw: unknown): LiveCategory | null {
@@ -1294,7 +1344,9 @@ async function resolvePlaybackHrefViaNodecast(
   if (progressive) {
     const transcodedFirst = await createNodecastTranscodeUrl(b, extracted.href, headers);
     if (transcodedFirst) return transcodedFirst;
-    return resolveCandidateToPlayableUrl(viaProxy, headers);
+    const viaProxyPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);
+    if (viaProxyPlayable && hrefLooksLikeHlsPlaylist(viaProxyPlayable)) return viaProxyPlayable;
+    return null;
   }
   const proxiedPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);
   if (proxiedPlayable) return proxiedPlayable;
@@ -1455,7 +1507,14 @@ export async function resolveNodecastVodStreamUrl(
   );
   for (const candidate of candidates) {
     const playable = await resolveCandidateToPlayableUrl(candidate, authHeaders);
-    if (playable) return playable;
+    if (!playable) continue;
+    if (hrefLooksLikeHlsPlaylist(playable)) return playable;
+    if (hrefLooksLikeProgressiveContainer(playable)) {
+      const transcoded = await createNodecastTranscodeUrl(b, playable, authHeaders);
+      if (transcoded && hrefLooksLikeHlsPlaylist(transcoded)) return transcoded;
+      continue;
+    }
+    return playable;
   }
   return tryResolveVodFromGetInfo(b, sid, streamId, s, authHeaders);
 }

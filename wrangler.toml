@@ -1,0 +1,18 @@
+# Cloudflare Workers: script entry point + exported static bundle (unlock Variables & Secrets in dashboard).
+#
+# Deploy: npm run build && npx wrangler deploy
+# Secrets: npx wrangler secret put MY_SECRET_KEY
+
+name = "velora-player"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# Non-sensitive values (readable in dashboard + wrangler.toml). Secrets use `wrangler secret put …`.
+# Note: SPA `import.meta.env.VITE_*` is baked in at `npm run build`; Worker [vars] apply to the Worker (src/index.js) unless you wire them into the client.
+[vars]
+EXAMPLE_PUBLIC_VAR = "placeholder"
+VITE_DEFAULT_COUNTRY = "France"

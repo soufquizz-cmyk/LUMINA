@@ -183,7 +183,8 @@
       </section>
 
       <main class="main main--velora hidden" id="main">
-        <div class="vel-sticky-top">
+        <div class="vel-dashboard">
+          <div class="vel-sticky-top">
           <header class="vel-header">
             <div class="vel-brand">
               Velora<span class="vel-brand-vip"
@@ -191,6 +192,9 @@
                 ><span class="vel-brand-vip__p">P</span></span>
             </div>
             <div class="vel-header__right">
+              <div class="vel-header__country">
+                <select id="country-select" class="country-select" aria-label="Pays"></select>
+              </div>
               <button
                 type="button"
                 id="btn-settings"
@@ -209,7 +213,6 @@
 
                 </label>
               </div>
-              <select id="country-select" class="country-select" aria-label="Pays"></select>
               <button type="button" id="btn-logout" class="vel-logout hidden" title="Déconnexion">
                 Out
               </button>
@@ -231,7 +234,7 @@
               ×
             </button>
             <div class="video-wrapper">
-              <video id="video" controls playsinline></video>
+              <video id="video" controls playsinline preload="auto" crossorigin="anonymous"></video>
               <div
                 id="player-buffering"
                 class="player-buffering hidden"
@@ -265,7 +268,14 @@
               ×
             </button>
             <div class="video-wrapper">
-              <video id="video-vod" controls playsinline></video>
+              <video
+                id="video-vod"
+                controls
+                playsinline
+                preload="auto"
+                muted
+                crossorigin="anonymous"
+              ></video>
               <div
                 id="vod-player-buffering"
                 class="player-buffering hidden"
@@ -303,28 +313,31 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <div class="vel-body">
-          <div class="nav-tabs" id="main-tabs" role="tablist">
-            <button type="button" class="tab tab--vip-v active" id="tab-live" data-tab="live" role="tab">
-               LIVE
-            </button>
-            <button type="button" class="tab tab--vip-i" id="tab-movies" data-tab="movies" role="tab">
-              FILMS
-            </button>
-            <button type="button" class="tab tab--vip-p" id="tab-series" data-tab="series" role="tab">
-              SÉRIES
-            </button>
           </div>
 
-          <div id="packages-view" class="grid vel-packages" aria-label="Bouquets"></div>
-
-          <div id="content-view" class="hidden">
-            <div id="cat-pills-wrap" class="cat-pills-wrap vel-cat-pills-wrap hidden">
-              <div id="cat-pills" class="vel-pills" role="tablist" aria-label="Filtres"></div>
+          <aside class="vel-sidebar" aria-label="Navigation et pays">
+            <div class="nav-tabs" id="main-tabs" role="tablist">
+              <button type="button" class="tab tab--vip-v active" id="tab-live" data-tab="live" role="tab">
+                 LIVE
+              </button>
+              <button type="button" class="tab tab--vip-i" id="tab-movies" data-tab="movies" role="tab">
+                FILMS
+              </button>
+              <button type="button" class="tab tab--vip-p" id="tab-series" data-tab="series" role="tab">
+                SÉRIES
+              </button>
             </div>
-            <div class="item-list" id="dynamic-list"></div>
+          </aside>
+
+          <div class="vel-body">
+            <div id="packages-view" class="grid vel-packages" aria-label="Bouquets"></div>
+
+            <div id="content-view" class="hidden">
+              <div id="cat-pills-wrap" class="cat-pills-wrap vel-cat-pills-wrap hidden">
+                <div id="cat-pills" class="vel-pills" role="tablist" aria-label="Filtres"></div>
+              </div>
+              <div class="item-list" id="dynamic-list"></div>
+            </div>
           </div>
         </div>
       </main>

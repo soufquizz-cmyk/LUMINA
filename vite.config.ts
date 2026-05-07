@@ -122,8 +122,11 @@ type Next = (err?: unknown) => void;
 const PROXY_HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
-  "transfer-encoding",
-  "content-encoding",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
   "set-cookie",
 ]);
 
@@ -139,16 +142,31 @@ function copyUpstreamHeadersToClient(upstream: Response, res: ServerResponse): v
   });
 }
 
-function isLikelyMediaRequest(targetUrl: string, contentType: string): boolean {
-  const path = new URL(targetUrl).pathname.toLowerCase();
-  const ct = contentType.toLowerCase();
+function isPlaylistPath(pathname: string): boolean {
+  return /\.m3u8$/i.test(pathname);
+}
+
+function isMediaBinaryPath(pathname: string): boolean {
+  return /\.(ts|m4s|mp4|m4v|mkv|aac|mp3|webm|vtt|webvtt|m3u8\.ts)$/i.test(pathname) ||
+    /\/segment\//i.test(pathname);
+}
+
+function isLikelyLivePlaylist(body: string): boolean {
   return (
-    /\.m3u8(?:$|\?)/i.test(path) ||
-    /\.(ts|m4s|m4v|mp4|aac|mp3|webm|mkv)(?:$|\?)/i.test(path) ||
-    ct.includes("mpegurl") ||
-    ct.startsWith("video/") ||
-    ct.startsWith("audio/")
+    /#EXT-X-TARGETDURATION:/i.test(body) ||
+    /#EXT-X-MEDIA-SEQUENCE:/i.test(body) ||
+    /#EXT-X-PLAYLIST-TYPE:\s*EVENT/i.test(body)
   );
+}
+
+function applyMediaCachingHeaders(res: ServerResponse, upstream: Response, targetUrl: string): void {
+  const pathname = new URL(targetUrl).pathname;
+  if (isPlaylistPath(pathname)) return;
+  if (!isMediaBinaryPath(pathname)) return;
+  const cacheControl = upstream.headers.get("cache-control");
+  if (!cacheControl?.trim()) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  }
 }
 
 /** Avoid :80 / :443 in headers; some CDNs treat them as different from default. */
@@ -302,12 +320,16 @@ function buildUpstreamHeaders(
     h.Origin = origin;
   }
   const range = req.headers.range;
-  const suppressRangeToUpstream =
-    /\.m3u8(?:$|\?)/i.test(targetPath) ||
-    /\.(ts|m4s)(?:$|\?)/i.test(targetPath) ||
-    targetIsTsUnderHls;
-  if (typeof range === "string" && !suppressRangeToUpstream) {
+  if (typeof range === "string" && range.trim()) {
     h.Range = range;
+  }
+  const ifRange = req.headers["if-range"];
+  if (typeof ifRange === "string" && ifRange.trim()) {
+    h["If-Range"] = ifRange;
+  }
+  const acceptEncoding = req.headers["accept-encoding"];
+  if (typeof acceptEncoding === "string" && acceptEncoding.trim()) {
+    h["Accept-Encoding"] = acceptEncoding;
   }
   const authorization = req.headers.authorization;
   if (typeof authorization === "string" && authorization.trim()) {
@@ -484,11 +506,15 @@ function proxyMiddleware() {
         }
         const text = buf.toString("utf8");
         const rewritten = rewriteM3u8(text, q);
-        res.statusCode = 200;
+        res.statusCode = upstream.status;
+        copyUpstreamHeadersToClient(upstream, res);
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-        res.setHeader("Pragma", "no-cache");
-        res.setHeader("Expires", "0");
+        res.removeHeader("Content-Length");
+        if (!upstream.headers.get("cache-control") && isLikelyLivePlaylist(text)) {
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        }
         res.end(rewritten);
         return;
       }
@@ -548,11 +574,7 @@ function proxyMiddleware() {
       ) {
         res.statusCode = upstream.status;
         copyUpstreamHeadersToClient(upstream, res);
-        if (isLikelyMediaRequest(q, ct)) {
-          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-          res.setHeader("Pragma", "no-cache");
-          res.setHeader("Expires", "0");
-        }
+        applyMediaCachingHeaders(res, upstream, q);
         res.end();
         return;
       }
@@ -576,11 +598,13 @@ function proxyMiddleware() {
       });
       res.statusCode = upstream.status;
       copyUpstreamHeadersToClient(upstream, res);
-      if (isLikelyMediaRequest(q, ct)) {
-        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-        res.setHeader("Pragma", "no-cache");
-        res.setHeader("Expires", "0");
+      if (!res.getHeader("Content-Type") && ct) res.setHeader("Content-Type", ct);
+      if (!res.getHeader("Accept-Ranges")) {
+        const acceptRanges = upstream.headers.get("accept-ranges");
+        if (acceptRanges) res.setHeader("Accept-Ranges", acceptRanges);
       }
+      applyMediaCachingHeaders(res, upstream, q);
+      (res as ServerResponse & { flushHeaders?: () => void }).flushHeaders?.();
       const webBody = upstream.body as import("stream/web").ReadableStream<Uint8Array>;
       const nodeReadable = Readable.fromWeb(webBody);
       await pipeline(nodeReadable, res);

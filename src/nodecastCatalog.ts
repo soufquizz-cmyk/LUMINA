@@ -80,6 +80,8 @@ const PLAYABLE_PROBE_FETCH_MS = 18_000;
 const TRANSCODE_CACHE_MS = 3 * 60 * 1000;
 const transcodePlaylistCache = new Map<string, { expires: number; playlistUrl: string }>();
 const transcodeInflight = new Map<string, Promise<string | null>>();
+const transcodeFailureCooldown = new Map<string, number>();
+const TRANSCODE_FAILURE_COOLDOWN_MS = 90_000;
 const MAX_PARALLEL_TRANSCODE_SESSION_POSTS = 1;
 let activeTranscodeSessionPosts = 0;
 const transcodeSessionPostWaiters: Array<() => void> = [];
@@ -108,6 +110,20 @@ function isRateLimitLikeErrorMessage(msg: string): boolean {
     lower.includes("too many request") ||
     lower.includes("bandwidth limit")
   );
+}
+
+function isTranscodeFailureCoolingDown(url: string): boolean {
+  const until = transcodeFailureCooldown.get(url);
+  if (!until) return false;
+  if (until <= Date.now()) {
+    transcodeFailureCooldown.delete(url);
+    return false;
+  }
+  return true;
+}
+
+function setTranscodeFailureCooldown(url: string, ms = TRANSCODE_FAILURE_COOLDOWN_MS): void {
+  transcodeFailureCooldown.set(url, Date.now() + ms);
 }
 
 export async function fetchProxiedJson<T>(url: string): Promise<T> {
@@ -468,6 +484,9 @@ async function createNodecastTranscodeUrl(
   headers?: Record<string, string>
 ): Promise<string | null> {
   const upstreamUrl = innermostHttpStreamTarget(upstreamUrlRaw);
+  if (isTranscodeFailureCoolingDown(upstreamUrl)) {
+    return null;
+  }
   const now = Date.now();
   const cached = transcodePlaylistCache.get(upstreamUrl);
   if (cached && cached.expires > now) {
@@ -497,7 +516,7 @@ async function createNodecastTranscodeUrl(
     const postBody = JSON.stringify({ url: upstreamUrl });
     const sessionUrl = `${nodecastBase}/api/transcode/session`;
 
-    const attemptDelaysMs = [0, 4_000, 8_000];
+    const attemptDelaysMs = [0, 4_000, 10_000];
     for (let round = 0; round < attemptDelaysMs.length; round++) {
       if (round > 0) {
         await new Promise((r) => setTimeout(r, attemptDelaysMs[round]));
@@ -533,14 +552,20 @@ async function createNodecastTranscodeUrl(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (isRateLimitLikeErrorMessage(msg)) {
+          // Avoid hammering provider/panel when upstream is clearly rate-limiting.
+          setTranscodeFailureCooldown(upstreamUrl);
           break;
         }
         const isPlaylistTimeout = msg.includes("Playlist not generated in time");
         if (!isPlaylistTimeout || round === attemptDelaysMs.length - 1) {
+          if (round === attemptDelaysMs.length - 1) {
+            setTranscodeFailureCooldown(upstreamUrl, 30_000);
+          }
           break;
         }
       }
     }
+    setTranscodeFailureCooldown(upstreamUrl, 45_000);
     return null;
   })().finally(() => {
     transcodeInflight.delete(upstreamUrl);
@@ -1342,10 +1367,11 @@ async function resolvePlaybackHrefViaNodecast(
      Prefer transcode first for file containers; never return viaProxy after both paths fail
      (that would replay the same broken URL in <video>). */
   if (progressive) {
-    const transcodedFirst = await createNodecastTranscodeUrl(b, extracted.href, headers);
-    if (transcodedFirst) return transcodedFirst;
+    // Try direct proxy first: avoids unnecessary transcode startup and reduces churn.
     const viaProxyPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);
     if (viaProxyPlayable && hrefLooksLikeHlsPlaylist(viaProxyPlayable)) return viaProxyPlayable;
+    const transcodedFirst = await createNodecastTranscodeUrl(b, extracted.href, headers);
+    if (transcodedFirst) return transcodedFirst;
     return null;
   }
   const proxiedPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);

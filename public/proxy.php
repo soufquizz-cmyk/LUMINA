@@ -17,7 +17,7 @@ declare(strict_types=1);
  * Default allowlist (only these hosts may be fetched as `target=`).
  * Your Nodecast panel — add more comma-separated entries if playlists use other CDN hosts.
  */
-$PROXY_ALLOWED_HOSTS = '5.180.180.198,5.180.180.198:3000';
+$PROXY_ALLOWED_HOSTS = '212.227.211.154,212.227.211.154:3000';
 
 session_start();
 

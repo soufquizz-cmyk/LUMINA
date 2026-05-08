@@ -3763,10 +3763,12 @@ body.vel-vod-fullscreen-active .main--velora {
   border: none;
   width: 100%;
   min-height: calc(100dvh - 10.5rem);
+  background: #000;
 }
 
 /* Hero : largeur image = largeur du bloc (pas `cover` qui rogne les côtés sur bandeau 16:9). */
 #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__bg {
+  background-color: #000;
   background-size: 100% auto;
   background-position: center top;
   background-repeat: no-repeat;
@@ -3799,10 +3801,10 @@ body.vel-vod-fullscreen-active .main--velora {
     rgba(6, 4, 12, 0.58) 76%,
     rgba(6, 4, 12, 0.82) 86%,
     rgba(6, 4, 12, 0.94) 94%,
-    rgb(5, 3, 11) 100%
+    #000 100%
   );
-  box-shadow: inset 0 -2.5rem 2.25rem -0.5rem rgba(4, 3, 10, 0.22),
-    inset 0 -5.5rem 4.5rem -1rem rgba(5, 4, 12, 0.28);
+  box-shadow: inset 0 -2.5rem 2.25rem -0.5rem rgba(0, 0, 0, 0.35),
+    inset 0 -5.5rem 4.5rem -1rem rgba(0, 0, 0, 0.4);
 }
 
 #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__bg--poster.vel-vod-detail__bg--entered::before {
@@ -3817,8 +3819,21 @@ body.vel-vod-fullscreen-active .main--velora {
     rgba(6, 4, 12, 0.55) 74%,
     rgba(6, 4, 12, 0.8) 85%,
     rgba(6, 4, 12, 0.94) 94%,
-    rgb(5, 3, 11) 100%
+    #000 100%
   );
+}
+
+/* Letterbox + zone sous le still : noir plein (le dégradé du ::before s’y fond). */
+#dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__bg--entered::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--vel-vod-hero-img-h, 100%);
+  bottom: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: #000;
 }
 
 #dynamic-list.item-list.item-list--vod-film-detail .vel-vod-detail__bg.vel-vod-detail__bg--entered {
@@ -3838,9 +3853,9 @@ body.vel-vod-fullscreen-active .main--velora {
     rgba(8, 6, 14, 0.04) min(28vh, 40%),
     rgba(8, 6, 14, 0.12) min(48vh, 62%),
     rgba(8, 6, 14, 0.42) 74%,
-    rgba(6, 5, 12, 0.82) 88%,
-    rgba(6, 5, 12, 0.96) 96%,
-    #06060a 100%
+    rgba(0, 0, 0, 0.82) 88%,
+    rgba(0, 0, 0, 0.96) 96%,
+    #000 100%
   );
 }
 

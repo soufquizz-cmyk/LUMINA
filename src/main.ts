@@ -337,6 +337,177 @@ let state: {
   seriesCatalogLoaded: boolean;
 } | null = null;
 
+/** Persist Nodecast catalogue + layouts for env-auth refresh (skip second login/catalog fetch). */
+const NODECAST_SNAPSHOT_STORAGE_KEY = "velora-nodecast-session-v1";
+
+type NodecastSnapshotStateJson = {
+  mode: "nodecast";
+  base: string;
+  username: string;
+  password: string;
+  nodecastAuthHeaders?: Record<string, string>;
+  serverInfo: ServerInfo;
+  streamsByCatAll: [string, LiveStream[]][];
+  nodecastXtreamSourceId?: string;
+  vodCategories: LiveCategory[];
+  vodStreamsByCat: [string, LiveStream[]][];
+  seriesCategories: LiveCategory[];
+  seriesStreamsByCat: [string, LiveStream[]][];
+  vodCatalogLoaded: boolean;
+  seriesCatalogLoaded: boolean;
+};
+
+type VeloraNodecastSnapshotV1 = {
+  v: 1;
+  credsKey: string;
+  state: NodecastSnapshotStateJson;
+  adminConfig: AdminConfig;
+  vodAdminConfig: AdminConfig;
+  seriesAdminConfig: AdminConfig;
+};
+
+function nodecastSnapshotCredsKey(): string {
+  const base = normalizeServerInput(elServer.value);
+  const username = elUser.value.trim();
+  const password = elPass.value;
+  return `${base}\u0000${username}\u0000${password}`;
+}
+
+function clearVeloraNodecastSnapshot(): void {
+  try {
+    sessionStorage.removeItem(NODECAST_SNAPSHOT_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistVeloraNodecastSnapshot(): void {
+  if (!envAutoConnectConfigured() || !state || state.mode !== "nodecast") return;
+  try {
+    const snap: VeloraNodecastSnapshotV1 = {
+      v: 1,
+      credsKey: nodecastSnapshotCredsKey(),
+      state: {
+        mode: "nodecast",
+        base: state.base,
+        username: state.username,
+        password: state.password,
+        nodecastAuthHeaders: state.nodecastAuthHeaders,
+        serverInfo: state.serverInfo,
+        streamsByCatAll: [...state.streamsByCatAll.entries()],
+        nodecastXtreamSourceId: state.nodecastXtreamSourceId,
+        vodCategories: state.vodCategories,
+        vodStreamsByCat: [...state.vodStreamsByCat.entries()],
+        seriesCategories: state.seriesCategories,
+        seriesStreamsByCat: [...state.seriesStreamsByCat.entries()],
+        vodCatalogLoaded: state.vodCatalogLoaded,
+        seriesCatalogLoaded: state.seriesCatalogLoaded,
+      },
+      adminConfig,
+      vodAdminConfig,
+      seriesAdminConfig,
+    };
+    sessionStorage.setItem(NODECAST_SNAPSHOT_STORAGE_KEY, JSON.stringify(snap));
+  } catch {
+    clearVeloraNodecastSnapshot();
+  }
+}
+
+function deserializeNodecastSnapshotState(p: NodecastSnapshotStateJson): NonNullable<typeof state> {
+  return {
+    mode: "nodecast",
+    base: p.base,
+    username: p.username,
+    password: p.password,
+    nodecastAuthHeaders: p.nodecastAuthHeaders,
+    serverInfo: p.serverInfo,
+    streamsByCatAll: new Map(p.streamsByCatAll),
+    nodecastXtreamSourceId: p.nodecastXtreamSourceId,
+    vodCategories: p.vodCategories,
+    vodStreamsByCat: new Map(p.vodStreamsByCat),
+    seriesCategories: p.seriesCategories,
+    seriesStreamsByCat: new Map(p.seriesStreamsByCat),
+    vodCatalogLoaded: p.vodCatalogLoaded,
+    seriesCatalogLoaded: p.seriesCatalogLoaded,
+  };
+}
+
+async function tryRestoreVeloraNodecastSnapshot(): Promise<boolean> {
+  if (!envAutoConnectConfigured() || !isNavigationReload()) return false;
+  applyNodecastEnvDefaults();
+  const credsKey = nodecastSnapshotCredsKey();
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(NODECAST_SNAPSHOT_STORAGE_KEY);
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as Partial<VeloraNodecastSnapshotV1>).v !== 1 ||
+    (parsed as Partial<VeloraNodecastSnapshotV1>).credsKey !== credsKey
+  ) {
+    return false;
+  }
+  const snap = parsed as VeloraNodecastSnapshotV1;
+  if (!snap.state || snap.state.mode !== "nodecast") return false;
+
+  elBtnConnect.disabled = true;
+  try {
+    setCatalogLoadingVisible(true, "Restauration de la session…", "live");
+    state = deserializeNodecastSnapshotState(snap.state);
+    adminConfig = snap.adminConfig;
+    vodAdminConfig = snap.vodAdminConfig;
+    seriesAdminConfig = snap.seriesAdminConfig;
+
+    await fetchAndApplyCanonicalCountries();
+    await fetchAndApplyChannelNamePrefixes();
+    await fetchAndApplyChannelHideNeedles();
+    await refreshSupabaseHierarchy();
+
+    selectedPillId = "all";
+    activeStreamId = null;
+    destroyPlayer();
+    destroyVodPlayer();
+    elNowPlaying.textContent = "";
+
+    goLiveHome();
+    elLoginPanel.classList.add("hidden");
+    elMain.classList.remove("hidden");
+    ensureVeloraHistoryRootMarker();
+    syncAdminSettingsButton();
+    setLoginStatus("");
+  } catch {
+    clearVeloraNodecastSnapshot();
+    state = null;
+    adminConfig = { ...EMPTY_ADMIN_CONFIG };
+    vodAdminConfig = { ...EMPTY_ADMIN_CONFIG };
+    seriesAdminConfig = { ...EMPTY_ADMIN_CONFIG };
+    return false;
+  } finally {
+    setCatalogLoadingVisible(false);
+    elBtnConnect.disabled = false;
+  }
+  return true;
+}
+
+async function bootEnvAutoconnect(): Promise<void> {
+  applyNodecastEnvDefaults();
+  if (isNavigationReload()) {
+    const restored = await tryRestoreVeloraNodecastSnapshot();
+    if (restored) return;
+  }
+  await connect();
+}
+
 let hls: Hls | null = null;
 let hlsVod: Hls | null = null;
 let primaryPlaybackKeepAliveCleanup: (() => void) | null = null;
@@ -1381,6 +1552,29 @@ function envAutoConnectConfigured(): boolean {
   const u = import.meta.env.VITE_NODECAST_URL?.trim();
   const n = import.meta.env.VITE_NODECAST_USERNAME?.trim();
   return Boolean(u && n);
+}
+
+/** Full page refresh (F5, location.reload, etc.). Used to skip env autoconnect. */
+function isNavigationReload(): boolean {
+  try {
+    const entries = performance.getEntriesByType("navigation");
+    const nav = entries[0] as PerformanceNavigationTiming | undefined;
+    if (nav?.type === "reload") return true;
+  } catch {
+    /* ignore */
+  }
+  try {
+    const legacy = (
+      performance as unknown as {
+        navigation?: { type?: number };
+      }
+    ).navigation;
+    /* 1 === PerformanceNavigationTiming.TYPE_RELOAD */
+    if (legacy?.type === 1) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 function applyNodecastEnvDefaults(): void {
@@ -4792,6 +4986,7 @@ async function connect(): Promise<void> {
     ensureVeloraHistoryRootMarker();
     syncAdminSettingsButton();
     setLoginStatus("");
+    persistVeloraNodecastSnapshot();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setLoginStatus(msg, true);
@@ -4814,6 +5009,7 @@ async function connect(): Promise<void> {
 }
 
 function disconnect(): void {
+  clearVeloraNodecastSnapshot();
   veloraUiHistoryDepth = 0;
   veloraApplyingHistoryPopstate = true;
   setChannelNamePrefixesFromDatabase(null);
@@ -4930,6 +5126,7 @@ elTabSeries.addEventListener("click", () => onTabClick("series"));
 elCountrySelect.addEventListener("change", onCountryChange);
 
 applyNodecastEnvDefaults();
+
 if (envAutoConnectConfigured()) {
   elHeaderLoginOnly?.classList.add("hidden");
   elLoginPanel.classList.add("hidden");
@@ -4974,7 +5171,7 @@ document.addEventListener("keydown", (e) => {
 
 if (envAutoConnectConfigured() && !isSettingsPageOpen()) {
   prepareEnvAutoconnectUi();
-  void connect();
+  void bootEnvAutoconnect();
 } else if (!isSettingsPageOpen()) {
   void fetchAndApplyCanonicalCountries().catch(() => {});
   void refreshSupabaseHierarchy().then(() => syncAdminSettingsButton());

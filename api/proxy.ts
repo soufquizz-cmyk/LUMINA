@@ -6,6 +6,7 @@
  * and memory/billing stay reasonable.
  */
 import { createHash } from "node:crypto";
+import { Redis } from "@upstash/redis";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -374,6 +375,107 @@ function etagForCachedCatalog(buf: Buffer, upstreamEtag?: string | null): string
   return `W/"${h}"`;
 }
 
+/** Cross-instance catalogue cache when Vercel / Upstash env is set (helps user B after user A warmed the key within TTL). */
+const CATALOG_KV_EX_SECONDS = 600;
+
+type CatalogKvPayloadV1 = {
+  v: 1;
+  etag: string;
+  status: number;
+  contentType: string | null;
+  bodyB64: string;
+};
+
+let redisLazy: Redis | null | undefined;
+
+function redisCatalogClient(): Redis | null {
+  if (redisLazy === null) return null;
+  if (redisLazy !== undefined) return redisLazy;
+  const url = (process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL ?? "").trim();
+  const token = (process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN ?? "").trim();
+  if (!url || !token) {
+    redisLazy = null;
+    return null;
+  }
+  try {
+    redisLazy = new Redis({ url, token });
+    return redisLazy;
+  } catch {
+    redisLazy = null;
+    return null;
+  }
+}
+
+function catalogueRedisStorageKey(primaryKey: string): string {
+  const h = createHash("sha256").update(primaryKey, "utf8").digest("hex");
+  return `velora-catalog-v1:${h}`;
+}
+
+function sendCatalogProxyCacheHit(
+  res: VercelResponse,
+  entry: CatalogMemoryCacheEntry,
+  label: string,
+): void {
+  res.status(entry.status);
+  if (entry.contentType) res.setHeader("Content-Type", entry.contentType);
+  res.setHeader(
+    "Cache-Control",
+    "public, max-age=0, s-maxage=600, stale-while-revalidate=60"
+  );
+  res.setHeader("ETag", entry.etag);
+  res.setHeader("X-Velora-Proxy-Catalog-Cache", label);
+  res.send(entry.body);
+}
+
+async function tryGetSharedCatalogEntry(
+  primaryKey: string,
+): Promise<CatalogMemoryCacheEntry | null> {
+  const r = redisCatalogClient();
+  if (!r) return null;
+  try {
+    const raw = await r.get<string>(catalogueRedisStorageKey(primaryKey));
+    if (typeof raw !== "string" || !raw) return null;
+    const data = JSON.parse(raw) as CatalogKvPayloadV1;
+    if (data.v !== 1 || typeof data.bodyB64 !== "string") return null;
+    return {
+      expiresAt: Date.now() + CATALOG_MEMORY_CACHE_TTL_MS,
+      etag: data.etag,
+      status: data.status,
+      contentType: data.contentType,
+      body: Buffer.from(data.bodyB64, "base64"),
+    };
+  } catch (e) {
+    console.warn("[proxy] catalogue shared cache read failed", e);
+    return null;
+  }
+}
+
+function enqueueSharedCatalogPut(
+  primaryKey: string,
+  body: Buffer,
+  meta: Pick<CatalogMemoryCacheEntry, "etag" | "status" | "contentType">,
+): void {
+  if (body.length > MAX_CATALOG_MEMORY_CACHE_BYTES) return;
+  const r = redisCatalogClient();
+  if (!r) return;
+  const payload: CatalogKvPayloadV1 = {
+    v: 1,
+    etag: meta.etag,
+    status: meta.status,
+    contentType: meta.contentType ?? null,
+    bodyB64: body.toString("base64"),
+  };
+  void (async () => {
+    try {
+      await r.set(catalogueRedisStorageKey(primaryKey), JSON.stringify(payload), {
+        ex: CATALOG_KV_EX_SECONDS,
+      });
+    } catch (e) {
+      console.warn("[proxy] catalogue shared cache write failed", e);
+    }
+  })();
+}
+
 function isAllowedTarget(target: string): boolean {
   const raw = process.env.PROXY_ALLOWED_HOSTS?.trim();
   if (!raw) return true;
@@ -504,17 +606,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   try {
     if (catalogMemoryKey) {
       pruneStaleCatalogMemoryIfLarge(Date.now());
-      const cached = catalogMemoryCacheByKey.get(catalogMemoryKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        res.status(cached.status);
-        if (cached.contentType) res.setHeader("Content-Type", cached.contentType);
-        res.setHeader(
-          "Cache-Control",
-          "public, max-age=0, s-maxage=600, stale-while-revalidate=60"
-        );
-        res.setHeader("ETag", cached.etag);
-        res.setHeader("X-Velora-Proxy-Catalog-Cache", "HIT");
-        res.send(cached.body);
+      const mem = catalogMemoryCacheByKey.get(catalogMemoryKey);
+      if (mem && mem.expiresAt > Date.now()) {
+        sendCatalogProxyCacheHit(res, mem, "HIT");
+        return;
+      }
+      const shared = await tryGetSharedCatalogEntry(catalogMemoryKey);
+      if (shared?.body?.length) {
+        catalogMemoryCacheByKey.set(catalogMemoryKey, shared);
+        sendCatalogProxyCacheHit(res, shared, "HIT-REDIS");
         return;
       }
     }
@@ -589,6 +689,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
           body: buf,
         });
       }
+      enqueueSharedCatalogPut(catalogMemoryKey, buf, {
+        etag,
+        status: upstream.status,
+        contentType: ct || null,
+      });
       res.setHeader("ETag", etag);
       res.setHeader("X-Velora-Proxy-Catalog-Cache", "MISS");
       res.send(buf);

@@ -66,8 +66,16 @@ function isCatalogApiTarget(targetUrl: string): boolean {
   }
 }
 
-function catalogProxyCacheKey(method: string, targetUrl: string): string {
-  return `${method.toUpperCase()}::${targetUrl}`;
+function catalogProxyCacheKey(
+  method: string,
+  targetUrl: string,
+  authorization?: string,
+): string {
+  const auth =
+    typeof authorization === "string" && authorization.trim()
+      ? authorization.trim()
+      : "(no-auth)";
+  return `${method.toUpperCase()}::${targetUrl}::${auth}`;
 }
 
 
@@ -468,7 +476,9 @@ function proxyMiddleware() {
       from
     );
     const cacheableCatalogRequest = method === "GET" && isCatalogApiTarget(q);
-    const cacheKey = cacheableCatalogRequest ? catalogProxyCacheKey(method, q) : null;
+    const cacheKey = cacheableCatalogRequest
+      ? catalogProxyCacheKey(method, q, outHeaders.Authorization)
+      : null;
     if (cacheableCatalogRequest && cacheKey) {
       const hit = catalogProxyCache.get(cacheKey);
       if (hit && hit.expiresAt > Date.now()) {

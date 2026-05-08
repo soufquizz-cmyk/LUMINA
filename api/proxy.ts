@@ -5,6 +5,7 @@
  * Media segments (.ts, etc.) are streamed (not fully buffered) so playback starts quickly
  * and memory/billing stay reasonable.
  */
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -331,6 +332,48 @@ function applyCatalogCachingHeaders(
   res.setHeader("Cache-Control", "public, max-age=0, s-maxage=600, stale-while-revalidate=60");
 }
 
+/** In-process cache (warm serverless instance only). Same TTL as dev `vite.config` catalog cache. CDN often BYPASS when Authorization is forwarded. */
+const CATALOG_MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+type CatalogMemoryCacheEntry = {
+  expiresAt: number;
+  etag: string;
+  status: number;
+  contentType: string | null;
+  body: Buffer;
+};
+
+const catalogMemoryCacheByKey = new Map<string, CatalogMemoryCacheEntry>();
+
+/** Oversized payloads are still proxied but not retained (protects Lambda memory). */
+const MAX_CATALOG_MEMORY_CACHE_BYTES = 28 * 1024 * 1024;
+
+function catalogMemoryCacheKey(
+  method: string,
+  targetUrl: string,
+  authorization?: string
+): string {
+  const auth =
+    typeof authorization === "string" && authorization.trim()
+      ? authorization.trim()
+      : "(no-auth)";
+  return `${method.toUpperCase()}::${stripDefaultPortHref(targetUrl)}::${auth}`;
+}
+
+function pruneStaleCatalogMemoryIfLarge(now: number): void {
+  if (catalogMemoryCacheByKey.size < 400) return;
+  for (const [key, entry] of catalogMemoryCacheByKey) {
+    if (entry.expiresAt <= now) catalogMemoryCacheByKey.delete(key);
+  }
+}
+
+function etagForCachedCatalog(buf: Buffer, upstreamEtag?: string | null): string {
+  const u = upstreamEtag?.trim();
+  if (u) return u;
+  const h = createHash("sha1").update(buf).digest("hex").slice(0, 28);
+  return `W/"${h}"`;
+}
+
 function isAllowedTarget(target: string): boolean {
   const raw = process.env.PROXY_ALLOWED_HOSTS?.trim();
   if (!raw) return true;
@@ -450,8 +493,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   ) {
     abortMs = Math.min(defaultUpstreamMs, streamProbeCapMs);
   }
+  const catalogMemoryKey =
+    method === "GET" &&
+    requestBody === undefined &&
+    isCatalogApiTarget(target)
+      ? catalogMemoryCacheKey(method, target, outHeaders.Authorization)
+      : null;
+
   const t = setTimeout(() => ac.abort(), abortMs);
   try {
+    if (catalogMemoryKey) {
+      pruneStaleCatalogMemoryIfLarge(Date.now());
+      const cached = catalogMemoryCacheByKey.get(catalogMemoryKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        res.status(cached.status);
+        if (cached.contentType) res.setHeader("Content-Type", cached.contentType);
+        res.setHeader(
+          "Cache-Control",
+          "public, max-age=0, s-maxage=600, stale-while-revalidate=60"
+        );
+        res.setHeader("ETag", cached.etag);
+        res.setHeader("X-Velora-Proxy-Catalog-Cache", "HIT");
+        res.send(cached.body);
+        return;
+      }
+    }
+
     const upstream = await fetch(target, {
       signal: ac.signal,
       method,
@@ -489,6 +556,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       }
       applyCatalogCachingHeaders(req, res, upstream, target);
       res.send(Buffer.from(rewritten, "utf8"));
+      return;
+    }
+
+    if (
+      catalogMemoryKey &&
+      upstream.ok &&
+      upstream.status === 200 &&
+      upstream.body &&
+      !(ct === "application/vnd.apple.mpegurl" ||
+        ct === "application/x-mpegURL")
+    ) {
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.status(upstream.status);
+      copyUpstreamHeadersToRes(upstream, res);
+      try {
+        res.removeHeader("Content-Length");
+        res.removeHeader("Transfer-Encoding");
+      } catch {
+        /* ignore */
+      }
+      applyMediaCachingHeaders(res, upstream, target);
+      applyCatalogCachingHeaders(req, res, upstream, target);
+      const etagSrc = upstream.headers.get("etag");
+      const etag = etagForCachedCatalog(buf, etagSrc);
+      if (buf.length <= MAX_CATALOG_MEMORY_CACHE_BYTES) {
+        catalogMemoryCacheByKey.set(catalogMemoryKey, {
+          expiresAt: Date.now() + CATALOG_MEMORY_CACHE_TTL_MS,
+          etag,
+          status: upstream.status,
+          contentType: ct || null,
+          body: buf,
+        });
+      }
+      res.setHeader("ETag", etag);
+      res.setHeader("X-Velora-Proxy-Catalog-Cache", "MISS");
+      res.send(buf);
       return;
     }
 

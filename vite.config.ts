@@ -8,6 +8,11 @@ import {
   handleR2PackageCoverRoute,
   isR2PackageCoverRoute,
 } from "./api/r2PackageCoverShared";
+import {
+  isR2CatalogCacheConfigured,
+  schedulePutCatalogToR2,
+  tryGetCatalogFromR2,
+} from "./api/r2CatalogCacheShared";
 import { fromBase64UrlUtf8, proxiedFullUrl } from "./api/proxyParamTransport";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -24,15 +29,6 @@ const upstreamSession = {
   /** `http://host/hls/<token>/` → last successful playlist URL for that token */
   lastM3u8ByHlsDir: new Map<string, string>(),
 };
-
-const CATALOG_PROXY_CACHE_TTL_MS = 10 * 60 * 1000;
-type CatalogProxyCacheEntry = {
-  expiresAt: number;
-  status: number;
-  contentType: string | null;
-  body: Buffer;
-};
-const catalogProxyCache = new Map<string, CatalogProxyCacheEntry>();
 
 function isCatalogApiTarget(targetUrl: string): boolean {
   try {
@@ -65,30 +61,6 @@ function isCatalogApiTarget(targetUrl: string): boolean {
     return false;
   }
 }
-
-/**
- * One global catalogue per upstream URL (Velora assumption). All users share the same 10‑min cache entry.
- * Set PROXY_SPLIT_CATALOG_CACHE_BY_AUTH=1 only if different Bearer tokens must get different cached JSON.
- */
-function catalogueProxyCacheAuthSuffix(authorization?: string): string {
-  if (process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1") {
-    const auth =
-      typeof authorization === "string" && authorization.trim()
-        ? authorization.trim()
-        : "(no-auth)";
-    return auth;
-  }
-  return "__merge__";
-}
-
-function catalogProxyCacheKey(
-  method: string,
-  targetUrl: string,
-  authorization?: string,
-): string {
-  return `${method.toUpperCase()}::${stripDefaultPortHref(targetUrl)}::${catalogueProxyCacheAuthSuffix(authorization)}`;
-}
-
 
 function isHttpUrl(s: string): boolean {
   try {
@@ -414,12 +386,14 @@ function buildUpstreamHeaders(
   };
 }
 
-function proxyMiddleware() {
+function proxyMiddleware(mode: string) {
   return async (req: IncomingMessage, res: ServerResponse, next: Next) => {
     if (!req.url?.startsWith(`${PROXY_PREFIX}?`)) {
       next();
       return;
     }
+    /** `.env` is not on `process.env` until merged (same as `r2-package-cover` middleware). */
+    const env = { ...process.env, ...loadEnv(mode, process.cwd(), "") };
     const raw = new URL(req.url, "http://localhost");
     const qb64 = raw.searchParams.get("targetB64");
     const fb64 = raw.searchParams.get("fromB64");
@@ -487,20 +461,15 @@ function proxyMiddleware() {
       from
     );
     const cacheableCatalogRequest = method === "GET" && isCatalogApiTarget(q);
-    const cacheKey = cacheableCatalogRequest
-      ? catalogProxyCacheKey(method, q, outHeaders.Authorization)
-      : null;
-    if (cacheableCatalogRequest && cacheKey) {
-      const hit = catalogProxyCache.get(cacheKey);
-      if (hit && hit.expiresAt > Date.now()) {
-        res.statusCode = hit.status;
-        if (hit.contentType) res.setHeader("Content-Type", hit.contentType);
-        res.setHeader("X-Proxy-Cache", "HIT");
-        res.end(hit.body);
+    if (cacheableCatalogRequest && isR2CatalogCacheConfigured(env)) {
+      const r2Hit = await tryGetCatalogFromR2(env, q);
+      if (r2Hit?.body.length) {
+        res.statusCode = 200;
+        if (r2Hit.contentType) res.setHeader("Content-Type", r2Hit.contentType);
+        if (r2Hit.etag) res.setHeader("ETag", r2Hit.etag);
+        res.setHeader("X-Proxy-Cache", "HIT-R2");
+        res.end(r2Hit.body);
         return;
-      }
-      if (hit && hit.expiresAt <= Date.now()) {
-        catalogProxyCache.delete(cacheKey);
       }
     }
 
@@ -667,15 +636,11 @@ function proxyMiddleware() {
         res.statusCode = upstream.status;
         copyUpstreamHeadersToClient(upstream, res);
         if (contentType) res.setHeader("Content-Type", contentType);
-        res.setHeader("X-Proxy-Cache", "MISS");
-        if (upstream.ok && cacheKey) {
-          catalogProxyCache.set(cacheKey, {
-            expiresAt: Date.now() + CATALOG_PROXY_CACHE_TTL_MS,
-            status: upstream.status,
-            contentType,
-            body: buf,
-          });
-        }
+        schedulePutCatalogToR2(env, q, buf, contentType, upstream.headers.get("etag"));
+        res.setHeader(
+          "X-Proxy-Cache",
+          isR2CatalogCacheConfigured(env) ? "MISS-R2" : "MISS"
+        );
         res.end(buf);
         return;
       }
@@ -802,13 +767,13 @@ export default defineConfig(({ mode }) => {
         console.log(
           "[xtream-proxy] Proxy ready. Failed upstream responses are logged. Verbose: XTREAM_PROXY_DEBUG=1 npm run dev"
         );
-        server.middlewares.use(proxyMiddleware());
+        server.middlewares.use(proxyMiddleware(server.config.mode));
       },
       configurePreviewServer(server) {
         console.log(
           "[xtream-proxy] Preview proxy ready. Verbose: XTREAM_PROXY_DEBUG=1 npm run preview"
         );
-        server.middlewares.use(proxyMiddleware());
+        server.middlewares.use(proxyMiddleware(server.config.mode));
       },
     }, cloudflare()],
   };

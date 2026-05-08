@@ -77,10 +77,6 @@ const TRANSCODE_SESSION_FETCH_MS = 18_000;
 const TRANSCODE_PROBE_WARM_FETCH_MS = 12_000;
 /** GET via `/proxy` to decide if a URL is playable — must not hang on stalled Nodecast/CDN streams. */
 const PLAYABLE_PROBE_FETCH_MS = 18_000;
-/** Same TTL as proxy / Vite catalogue cache — skip repeat Nodecat JSON within the SPA. */
-const CATALOG_JSON_CLIENT_CACHE_MS = 10 * 60 * 1000;
-/** Parsed JSON catalogue larger than this is proxied fresh each time (memory guard). */
-const MAX_CATALOG_JSON_CLIENT_UTF16 = 22 * 1024 * 1024;
 const TRANSCODE_CACHE_MS = 3 * 60 * 1000;
 const transcodePlaylistCache = new Map<string, { expires: number; playlistUrl: string }>();
 const transcodeInflight = new Map<string, Promise<string | null>>();
@@ -175,100 +171,7 @@ export async function fetchProxiedJson<T>(url: string): Promise<T> {
   return fetchProxiedJsonWithInit<T>(url);
 }
 
-/** Mirrors `vite.config.ts` / `api/proxy` `isCatalogApiTarget` — only catalogue-ish JSON endpoints. */
-function isUpstreamCatalogFetchTarget(urlStr: string): boolean {
-  try {
-    const u = new URL(urlStr);
-    const p = u.pathname.toLowerCase();
-    if (
-      p.endsWith("/api/channels") ||
-      p.endsWith("/api/live/channels") ||
-      p.endsWith("/api/content/live") ||
-      p.endsWith("/api/streams/live") ||
-      p.endsWith("/api/tv/channels") ||
-      p.endsWith("/api/content/channels") ||
-      p.endsWith("/api/live")
-    ) {
-      return true;
-    }
-    if (!p.includes("/api/proxy/xtream/")) return false;
-    return (
-      p.endsWith("/live_categories") ||
-      p.endsWith("/live_streams") ||
-      p.endsWith("/vod_categories") ||
-      p.endsWith("/vod_streams") ||
-      p.endsWith("/series_categories") ||
-      p.endsWith("/series") ||
-      p.endsWith("/get_series") ||
-      p.endsWith("/player_api") ||
-      p.endsWith("/player_api.php")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function catalogCacheAuthFingerprint(headers?: Record<string, string>): string {
-  if (import.meta.env.VITE_SPLIT_CATALOG_CLIENT_CACHE_BY_AUTH !== "true") {
-    return "";
-  }
-  if (!headers) return "";
-  const raw =
-    (typeof headers.Authorization === "string" && headers.Authorization.trim()) ||
-    (typeof headers.authorization === "string" && headers.authorization.trim()) ||
-    "";
-  return raw;
-}
-
-function catalogJsonClonePayload<T>(payload: unknown): T {
-  return JSON.parse(JSON.stringify(payload)) as T;
-}
-
-const catalogJsonMemoryCacheByKey = new Map<
-  string,
-  { expiresAt: number; payload: unknown }
->();
-const catalogJsonInflightByKey = new Map<string, Promise<unknown>>();
-
 export async function fetchProxiedJsonWithInit<T>(
-  url: string,
-  init: ProxiedRequestInit = {}
-): Promise<T> {
-  const method = init.method ?? "GET";
-  if (method !== "GET" || init.body != null || !isUpstreamCatalogFetchTarget(url)) {
-    return fetchProxiedJsonWithInitUncached<T>(url, init);
-  }
-
-  const cacheKey = `${url}\u0000${catalogCacheAuthFingerprint(init.headers)}`;
-  const cached = catalogJsonMemoryCacheByKey.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return catalogJsonClonePayload<T>(cached.payload);
-  }
-
-  const inFlightExisting = catalogJsonInflightByKey.get(cacheKey) as Promise<T> | undefined;
-  if (inFlightExisting) return inFlightExisting;
-
-  const pending = fetchProxiedJsonWithInitUncached<T>(url, init);
-  catalogJsonInflightByKey.set(cacheKey, pending);
-  try {
-    const parsed = await pending;
-    try {
-      const serial = JSON.stringify(parsed);
-      if (serial.length > 0 && serial.length <= MAX_CATALOG_JSON_CLIENT_UTF16) {
-        const frozen = JSON.parse(serial) as unknown;
-        const expiresAt = Date.now() + CATALOG_JSON_CLIENT_CACHE_MS;
-        catalogJsonMemoryCacheByKey.set(cacheKey, { expiresAt, payload: frozen });
-      }
-    } catch {
-      /* ignore oversized or non-serializable */
-    }
-    return parsed;
-  } finally {
-    catalogJsonInflightByKey.delete(cacheKey);
-  }
-}
-
-async function fetchProxiedJsonWithInitUncached<T>(
   url: string,
   init: ProxiedRequestInit = {}
 ): Promise<T> {

@@ -6,11 +6,15 @@
  * and memory/billing stay reasonable.
  */
 import { createHash } from "node:crypto";
-import { Redis } from "@upstash/redis";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { fromBase64UrlUtf8, proxiedFullUrl } from "./proxyParamTransport.js";
+import {
+  isR2CatalogCacheConfigured,
+  schedulePutCatalogToR2,
+  tryGetCatalogFromR2,
+} from "./r2CatalogCacheShared.js";
 
 const PROXY_PREFIX = (process.env.VITE_PROXY_PREFIX ?? "/proxy").replace(/\/$/, "");
 
@@ -333,155 +337,11 @@ function applyCatalogCachingHeaders(
   res.setHeader("Cache-Control", "public, max-age=0, s-maxage=600, stale-while-revalidate=60");
 }
 
-/** In-process cache (warm serverless instance only). Same TTL as dev `vite.config` catalog cache. CDN often BYPASS when Authorization is forwarded. */
-const CATALOG_MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
-
-type CatalogMemoryCacheEntry = {
-  expiresAt: number;
-  etag: string;
-  status: number;
-  contentType: string | null;
-  body: Buffer;
-};
-
-const catalogMemoryCacheByKey = new Map<string, CatalogMemoryCacheEntry>();
-
-/** Oversized payloads are still proxied but not retained (protects Lambda memory). */
-const MAX_CATALOG_MEMORY_CACHE_BYTES = 28 * 1024 * 1024;
-
-/** See `vite.config.ts` `catalogueProxyCacheAuthSuffix` — keep behaviour aligned. */
-function catalogueProxyCacheAuthSuffixServer(authorization?: string): string {
-  if (process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1") {
-    const auth =
-      typeof authorization === "string" && authorization.trim()
-        ? authorization.trim()
-        : "(no-auth)";
-    return auth;
-  }
-  return "__merge__";
-}
-
-function catalogMemoryCacheKey(
-  method: string,
-  targetUrl: string,
-  authorization?: string
-): string {
-  return `${method.toUpperCase()}::${stripDefaultPortHref(targetUrl)}::${catalogueProxyCacheAuthSuffixServer(authorization)}`;
-}
-
-function pruneStaleCatalogMemoryIfLarge(now: number): void {
-  if (catalogMemoryCacheByKey.size < 400) return;
-  for (const [key, entry] of catalogMemoryCacheByKey) {
-    if (entry.expiresAt <= now) catalogMemoryCacheByKey.delete(key);
-  }
-}
-
 function etagForCachedCatalog(buf: Buffer, upstreamEtag?: string | null): string {
   const u = upstreamEtag?.trim();
   if (u) return u;
   const h = createHash("sha1").update(buf).digest("hex").slice(0, 28);
   return `W/"${h}"`;
-}
-
-/** Cross-instance catalogue cache when Vercel / Upstash env is set (helps user B after user A warmed the key within TTL). */
-const CATALOG_KV_EX_SECONDS = 600;
-
-type CatalogKvPayloadV1 = {
-  v: 1;
-  etag: string;
-  status: number;
-  contentType: string | null;
-  bodyB64: string;
-};
-
-let redisLazy: Redis | null | undefined;
-
-function redisCatalogClient(): Redis | null {
-  if (redisLazy === null) return null;
-  if (redisLazy !== undefined) return redisLazy;
-  const url = (process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL ?? "").trim();
-  const token = (process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN ?? "").trim();
-  if (!url || !token) {
-    redisLazy = null;
-    return null;
-  }
-  try {
-    redisLazy = new Redis({ url, token });
-    return redisLazy;
-  } catch {
-    redisLazy = null;
-    return null;
-  }
-}
-
-function catalogueRedisStorageKey(primaryKey: string): string {
-  const h = createHash("sha256").update(primaryKey, "utf8").digest("hex");
-  return `velora-catalog-v1:${h}`;
-}
-
-function sendCatalogProxyCacheHit(
-  res: VercelResponse,
-  entry: CatalogMemoryCacheEntry,
-  label: string,
-): void {
-  res.status(entry.status);
-  if (entry.contentType) res.setHeader("Content-Type", entry.contentType);
-  res.setHeader(
-    "Cache-Control",
-    "public, max-age=0, s-maxage=600, stale-while-revalidate=60"
-  );
-  res.setHeader("ETag", entry.etag);
-  res.setHeader("X-Velora-Proxy-Catalog-Cache", label);
-  res.send(entry.body);
-}
-
-async function tryGetSharedCatalogEntry(
-  primaryKey: string,
-): Promise<CatalogMemoryCacheEntry | null> {
-  const r = redisCatalogClient();
-  if (!r) return null;
-  try {
-    const raw = await r.get<string>(catalogueRedisStorageKey(primaryKey));
-    if (typeof raw !== "string" || !raw) return null;
-    const data = JSON.parse(raw) as CatalogKvPayloadV1;
-    if (data.v !== 1 || typeof data.bodyB64 !== "string") return null;
-    return {
-      expiresAt: Date.now() + CATALOG_MEMORY_CACHE_TTL_MS,
-      etag: data.etag,
-      status: data.status,
-      contentType: data.contentType,
-      body: Buffer.from(data.bodyB64, "base64"),
-    };
-  } catch (e) {
-    console.warn("[proxy] catalogue shared cache read failed", e);
-    return null;
-  }
-}
-
-function enqueueSharedCatalogPut(
-  primaryKey: string,
-  body: Buffer,
-  meta: Pick<CatalogMemoryCacheEntry, "etag" | "status" | "contentType">,
-): void {
-  if (body.length > MAX_CATALOG_MEMORY_CACHE_BYTES) return;
-  const r = redisCatalogClient();
-  if (!r) return;
-  const payload: CatalogKvPayloadV1 = {
-    v: 1,
-    etag: meta.etag,
-    status: meta.status,
-    contentType: meta.contentType ?? null,
-    bodyB64: body.toString("base64"),
-  };
-  void (async () => {
-    try {
-      await r.set(catalogueRedisStorageKey(primaryKey), JSON.stringify(payload), {
-        ex: CATALOG_KV_EX_SECONDS,
-      });
-    } catch (e) {
-      console.warn("[proxy] catalogue shared cache write failed", e);
-    }
-  })();
 }
 
 function isAllowedTarget(target: string): boolean {
@@ -603,26 +463,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   ) {
     abortMs = Math.min(defaultUpstreamMs, streamProbeCapMs);
   }
-  const catalogMemoryKey =
-    method === "GET" &&
-    requestBody === undefined &&
-    isCatalogApiTarget(target)
-      ? catalogMemoryCacheKey(method, target, outHeaders.Authorization)
-      : null;
+  const catalogR2Eligible =
+    method === "GET" && requestBody === undefined && isCatalogApiTarget(target);
 
   const t = setTimeout(() => ac.abort(), abortMs);
   try {
-    if (catalogMemoryKey) {
-      pruneStaleCatalogMemoryIfLarge(Date.now());
-      const mem = catalogMemoryCacheByKey.get(catalogMemoryKey);
-      if (mem && mem.expiresAt > Date.now()) {
-        sendCatalogProxyCacheHit(res, mem, "HIT");
-        return;
-      }
-      const shared = await tryGetSharedCatalogEntry(catalogMemoryKey);
-      if (shared?.body?.length) {
-        catalogMemoryCacheByKey.set(catalogMemoryKey, shared);
-        sendCatalogProxyCacheHit(res, shared, "HIT-REDIS");
+    if (catalogR2Eligible && isR2CatalogCacheConfigured(process.env)) {
+      const r2Hit = await tryGetCatalogFromR2(process.env, target);
+      if (r2Hit?.body.length) {
+        res.status(200);
+        if (r2Hit.contentType) res.setHeader("Content-Type", r2Hit.contentType);
+        res.setHeader(
+          "Cache-Control",
+          "public, max-age=0, s-maxage=600, stale-while-revalidate=60"
+        );
+        res.setHeader("ETag", r2Hit.etag);
+        res.setHeader("X-Velora-Proxy-Catalog-Cache", "HIT-R2");
+        res.send(r2Hit.body);
         return;
       }
     }
@@ -668,7 +525,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     if (
-      catalogMemoryKey &&
+      catalogR2Eligible &&
       upstream.ok &&
       upstream.status === 200 &&
       upstream.body &&
@@ -688,22 +545,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       applyCatalogCachingHeaders(req, res, upstream, target);
       const etagSrc = upstream.headers.get("etag");
       const etag = etagForCachedCatalog(buf, etagSrc);
-      if (buf.length <= MAX_CATALOG_MEMORY_CACHE_BYTES) {
-        catalogMemoryCacheByKey.set(catalogMemoryKey, {
-          expiresAt: Date.now() + CATALOG_MEMORY_CACHE_TTL_MS,
-          etag,
-          status: upstream.status,
-          contentType: ct || null,
-          body: buf,
-        });
-      }
-      enqueueSharedCatalogPut(catalogMemoryKey, buf, {
-        etag,
-        status: upstream.status,
-        contentType: ct || null,
-      });
+      schedulePutCatalogToR2(process.env, target, buf, ct || null, etagSrc);
       res.setHeader("ETag", etag);
-      res.setHeader("X-Velora-Proxy-Catalog-Cache", "MISS");
+      res.setHeader(
+        "X-Velora-Proxy-Catalog-Cache",
+        isR2CatalogCacheConfigured(process.env) ? "MISS-R2" : "MISS"
+      );
       res.send(buf);
       return;
     }

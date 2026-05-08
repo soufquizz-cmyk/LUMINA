@@ -167,13 +167,12 @@ function buildUpstreamHeaders(
   if (!targetUnderHls || /\.m3u8$/i.test(targetPath) || targetIsTsUnderHls) {
     h.Origin = origin;
   }
-  const isLikelyMediaSegment =
-    /\.(ts|m4s|mp4|m4v|aac|mp3|webm|mkv)(?:$|\?)/i.test(targetPath) ||
-    /\/segment\//i.test(targetPath);
-  const isHlsChunkUrl =
-    /\.m3u8(?:$|\?)/i.test(targetPath) || /\.(ts|m4s)(?:$|\?)/i.test(targetPath);
   const range = getHeader(req, "range");
-  if (range && isLikelyMediaSegment && !isHlsChunkUrl) h.Range = range;
+  if (range?.trim()) h.Range = range;
+  const ifRange = getHeader(req, "if-range");
+  if (ifRange?.trim()) h["If-Range"] = ifRange;
+  const acceptEncoding = getHeader(req, "accept-encoding");
+  if (acceptEncoding?.trim()) h["Accept-Encoding"] = acceptEncoding;
   const authorization = getHeader(req, "authorization");
   if (authorization?.trim()) h.Authorization = authorization;
   const ifNoneMatch = getHeader(req, "if-none-match");
@@ -236,8 +235,11 @@ function readBody(req: VercelRequest): Promise<Buffer> {
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",
-  "transfer-encoding",
-  "content-encoding",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
   "set-cookie",
 ]);
 
@@ -253,22 +255,35 @@ function copyUpstreamHeadersToRes(upstream: Response, res: VercelResponse): void
   });
 }
 
-function setNoStoreHeaders(res: VercelResponse): void {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
+function isLikelyLivePlaylist(body: string): boolean {
+  return (
+    /#EXT-X-TARGETDURATION:/i.test(body) ||
+    /#EXT-X-MEDIA-SEQUENCE:/i.test(body) ||
+    /#EXT-X-PLAYLIST-TYPE:\s*EVENT/i.test(body)
+  );
 }
 
-function isLikelyMediaRequest(targetUrl: string, contentType: string): boolean {
-  const path = new URL(targetUrl).pathname.toLowerCase();
-  const ct = contentType.toLowerCase();
-  return (
-    /\.m3u8(?:$|\?)/i.test(path) ||
-    /\.(ts|m4s|m4v|mp4|aac|mp3|webm|mkv)(?:$|\?)/i.test(path) ||
-    ct.includes("mpegurl") ||
-    ct.startsWith("video/") ||
-    ct.startsWith("audio/")
-  );
+function isPlaylistPath(pathname: string): boolean {
+  return /\.m3u8$/i.test(pathname);
+}
+
+function isMediaBinaryPath(pathname: string): boolean {
+  return /\.(ts|m4s|mp4|m4v|mkv|aac|mp3|webm|vtt|webvtt|m3u8\.ts)$/i.test(pathname) ||
+    /\/segment\//i.test(pathname);
+}
+
+function applyMediaCachingHeaders(
+  res: VercelResponse,
+  upstream: Response,
+  targetUrl: string
+): void {
+  const pathname = new URL(targetUrl).pathname;
+  if (isPlaylistPath(pathname)) return;
+  if (!isMediaBinaryPath(pathname)) return;
+  const cacheControl = upstream.headers.get("cache-control");
+  if (!cacheControl?.trim()) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  }
 }
 
 function isAllowedTarget(target: string): boolean {
@@ -362,6 +377,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   const ac = new AbortController();
   const defaultUpstreamMs = 60_000;
+  const targetPath = new URL(target).pathname;
+  const isPlaylistRequest = /\.m3u8$/i.test(targetPath);
+  const isMediaSegmentRequest =
+    /\.(ts|m4s|mp4|m4v|aac|mp3|webm|mkv)$/i.test(targetPath) ||
+    /\/segment\//i.test(targetPath);
   const transcodeCapRaw = Number(process.env.XTREAM_PROXY_TRANSCODE_SESSION_MS);
   const transcodeSessionCapMs = Number.isFinite(transcodeCapRaw)
     ? Math.min(Math.max(transcodeCapRaw, 3_000), 120_000)
@@ -371,6 +391,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     ? Math.min(Math.max(streamProbeCapRaw, 3_000), 120_000)
     : 18_000;
   let abortMs = defaultUpstreamMs;
+  if (isMediaSegmentRequest) {
+    abortMs = 180_000;
+  } else if (isPlaylistRequest) {
+    abortMs = 45_000;
+  }
   if (method === "POST" && /\/api\/transcode\/session(?:\?|$)/i.test(target)) {
     abortMs = Math.min(defaultUpstreamMs, transcodeSessionCapMs);
   } else if (
@@ -407,9 +432,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       if (dirKey) lastM3u8ByHlsDir.set(dirKey, stripDefaultPortHref(target));
       const text = buf.toString("utf8");
       const rewritten = rewriteM3u8(text, target);
-      res.status(200);
+      res.status(upstream.status);
+      copyUpstreamHeadersToRes(upstream, res);
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-      setNoStoreHeaders(res);
+      res.removeHeader("Content-Length");
+      if (!upstream.headers.get("cache-control") && isLikelyLivePlaylist(text)) {
+        // Live playlists should revalidate frequently; do not force no-store on segments.
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+      }
       res.send(Buffer.from(rewritten, "utf8"));
       return;
     }
@@ -423,7 +455,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       !upstream.body
     ) {
       copyUpstreamHeadersToRes(upstream, res);
-      if (isLikelyMediaRequest(target, ct)) setNoStoreHeaders(res);
+      applyMediaCachingHeaders(res, upstream, target);
       res.end();
       return;
     }
@@ -437,7 +469,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     });
 
     copyUpstreamHeadersToRes(upstream, res);
-    if (isLikelyMediaRequest(target, ct)) setNoStoreHeaders(res);
+    if (!res.getHeader("Content-Type") && ct) res.setHeader("Content-Type", ct);
+    if (!res.getHeader("Accept-Ranges")) {
+      const acceptRanges = upstream.headers.get("accept-ranges");
+      if (acceptRanges) res.setHeader("Accept-Ranges", acceptRanges);
+    }
+    applyMediaCachingHeaders(res, upstream, target);
+    res.flushHeaders?.();
 
     const webBody = upstream.body as import("stream/web").ReadableStream<Uint8Array>;
     const nodeReadable = Readable.fromWeb(webBody);

@@ -348,15 +348,23 @@ const NODECAST_HLS_USER_AGENT = "VLC/3.0.18 LibVLC/3.0.18";
 /** hls.js VOD tuned to stay ahead and avoid the “few seconds loaded” wall. */
 const HLS_VOD_CONFIG_BASE = {
   enableSoftwareAES: true,
-  maxBufferLength: 90,
-  maxMaxBufferLength: 180,
+  testBandwidth: false,
+  autoStartLoad: true,
+  startPosition: 0,
+  startFragPrefetch: true,
+  maxBufferLength: 60,
+  maxMaxBufferLength: 120,
+  backBufferLength: 30,
+  maxBufferHole: 0.5,
   maxLoadingDelay: 4,
-  manifestLoadingMaxRetry: 10,
+  manifestLoadingMaxRetry: 8,
+  manifestLoadingRetryDelay: 500,
   levelLoadingMaxRetry: 10,
-  fragLoadingMaxRetry: 10,
+  fragLoadingMaxRetry: 8,
+  fragLoadingRetryDelay: 500,
+  fragLoadingMaxRetryTimeout: 8000,
   enableWorker: true,
   initialLiveManifestSize: 1,
-  backBufferLength: 0,
   /** Sliding-window transcode playlists are `live`; keep MSE duration unbounded so playback does not “end” early. */
   liveDurationInfinity: true,
 } as const;
@@ -367,9 +375,17 @@ const VOD_WATCHDOG_STALL_MS = 6500;
 const VOD_REMOUNT_MIN_GAP_MS = 2000;
 const VOD_REMOUNT_MAX_ATTEMPTS = 8;
 const VOD_MIN_AHEAD_SECONDS = 3;
+const STARTUP_MIN_BUFFER_SECONDS = 6;
+const STARTUP_BUFFER_WAIT_TIMEOUT_MS = 12_000;
 const VOD_BUFFER_STALL_WAKE_MS = 3200;
 const VOD_BUFFER_STALL_EDGE_SECONDS = 0.9;
 const VOD_NUDGE_COOLDOWN_MS = 5000;
+const HLS_WARMUP_PREFERRED_SECONDS = 25;
+const HLS_WARMUP_FALLBACK_SECONDS = 12;
+const HLS_WARMUP_MIN_SEGMENTS = 4;
+const HLS_WARMUP_FALLBACK_AFTER_MS = 20_000;
+const HLS_WARMUP_MAX_WAIT_MS = 25_000;
+const HLS_WARMUP_POLL_MS = 750;
 
 let vodPlaybackHelpersCleanup: (() => void) | null = null;
 let vodStallRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -377,6 +393,7 @@ let lastVodProxiedUrl: string | null = null;
 let lastVodUpstreamAuth: Record<string, string> | undefined;
 let vodRemountAttempts = 0;
 let vodLastRemountTs = 0;
+let vodPlaybackSessionId = 0;
 
 function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): void {
   void status;
@@ -407,6 +424,80 @@ function playVodAggressive(video: HTMLVideoElement): void {
   });
 }
 
+async function waitForStartupBuffer(
+  video: HTMLVideoElement,
+  minAheadSeconds = STARTUP_MIN_BUFFER_SECONDS,
+  timeoutMs = STARTUP_BUFFER_WAIT_TIMEOUT_MS
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (video.buffered && video.buffered.length > 0) {
+        const end = video.buffered.end(video.buffered.length - 1);
+        const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+        if (end - t >= minAheadSeconds) return;
+      }
+    } catch {
+      /* ignore buffered reads while media attaches */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+function parseHlsStartupDepth(playlistBody: string): { segmentCount: number; totalSeconds: number } {
+  let segmentCount = 0;
+  let totalSeconds = 0;
+  for (const raw of playlistBody.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith("#EXTINF:")) {
+      const part = line.slice("#EXTINF:".length).split(",")[0]?.trim() ?? "";
+      const sec = Number(part);
+      if (Number.isFinite(sec) && sec > 0) totalSeconds += sec;
+      continue;
+    }
+    if (!line.startsWith("#")) segmentCount += 1;
+  }
+  return { segmentCount, totalSeconds };
+}
+
+async function waitForHlsStartupBuffer(url: string): Promise<void> {
+  const startedAt = Date.now();
+  while (true) {
+    let segmentCount = 0;
+    let totalSeconds = 0;
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, */*" },
+      });
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = parseHlsStartupDepth(text);
+        segmentCount = parsed.segmentCount;
+        totalSeconds = parsed.totalSeconds;
+      }
+    } catch {
+      /* ignore transient warmup fetch failures */
+    }
+    const waitedMs = Date.now() - startedAt;
+    if (
+      totalSeconds >= HLS_WARMUP_PREFERRED_SECONDS ||
+      segmentCount >= HLS_WARMUP_MIN_SEGMENTS
+    ) {
+      return;
+    }
+    if (waitedMs >= HLS_WARMUP_FALLBACK_AFTER_MS && totalSeconds >= HLS_WARMUP_FALLBACK_SECONDS) {
+      return;
+    }
+    if (waitedMs >= HLS_WARMUP_MAX_WAIT_MS) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, HLS_WARMUP_POLL_MS));
+  }
+}
+
 function vodHlsXhrSetup(
   xhr: XMLHttpRequest,
   _url: string,
@@ -434,7 +525,7 @@ function mountHlsVod(
   proxied: string,
   video: HTMLVideoElement,
   upstreamAuth: Record<string, string> | undefined,
-  opts?: { resumeAt?: number }
+  opts?: { resumeAt?: number; autoPlayOnManifest?: boolean }
 ): void {
   if (hlsVod) {
     try {
@@ -474,7 +565,9 @@ function mountHlsVod(
     } catch {
       /* ignore */
     }
-    playVodAggressive(video);
+    if (opts?.autoPlayOnManifest !== false) {
+      playVodAggressive(video);
+    }
   });
 
   hlsVod.on(Hls.Events.ERROR, (_e, data: ErrorData) => {
@@ -1083,8 +1176,14 @@ function playUrl(
     hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
-      maxBufferLength: 60,
-      maxMaxBufferLength: 120,
+      testBandwidth: false,
+      startLevel: 0,
+      // Keep enough buffered media for smooth playback without drifting too far behind live edge.
+      maxBufferLength: 45,
+      maxMaxBufferLength: 90,
+      backBufferLength: 30,
+      liveSyncDurationCount: 4,
+      liveMaxLatencyDurationCount: 12,
       manifestLoadingMaxRetry: 12,
       levelLoadingMaxRetry: 12,
       fragLoadingMaxRetry: 14,
@@ -1107,12 +1206,29 @@ function playUrl(
     });
     hls.loadSource(proxied);
     hls.attachMedia(elVideo);
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    hls.on(Hls.Events.MANIFEST_PARSED, async () => {
       attachPrimaryPlaybackKeepAlive(elVideo);
+      await waitForStartupBuffer(elVideo);
       void elVideo.play().catch(() => {});
     });
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (data.fatal) {
+        if (data.type === ErrorTypes.NETWORK_ERROR) {
+          try {
+            hls?.startLoad(-1);
+            return;
+          } catch {
+            /* ignore */
+          }
+        }
+        if (data.type === ErrorTypes.MEDIA_ERROR) {
+          try {
+            hls?.recoverMediaError();
+            return;
+          } catch {
+            /* ignore */
+          }
+        }
         elNowPlaying.innerHTML = nowPlayingErrorMarkup(
           `Erreur lecture : ${data.type} / ${String(data.details)}`
         );
@@ -1129,7 +1245,10 @@ function playUrl(
 /** Lecteur VOD : `<video>` et instance HLS séparées du direct TV. */
 function playVodUrl(url: string, label: string, upstreamAuth?: Record<string, string>): void {
   if (!elVideoVod || !elNowPlayingVod) return;
+  vodPlaybackSessionId += 1;
+  const sessionId = vodPlaybackSessionId;
   setVodPlayerBufferingVisible(true);
+  startVodFakeLoadingOverlay("Preparation du flux...");
   teardownVodMedia();
   attachNodecastStatusPollingForPlayback();
   elVideoVod.preload = "metadata";
@@ -1150,9 +1269,16 @@ function playVodUrl(url: string, label: string, upstreamAuth?: Record<string, st
   }
 
   if (Hls.isSupported()) {
-    mountHlsVod(proxied, elVideoVod, upstreamAuth);
-    attachVodPlaybackHelpers(elVideoVod);
-    playVodAggressive(elVideoVod);
+    void (async () => {
+      await waitForHlsStartupBuffer(proxied);
+      if (sessionId !== vodPlaybackSessionId) return;
+      mountHlsVod(proxied, elVideoVod, upstreamAuth, { autoPlayOnManifest: false });
+      if (sessionId !== vodPlaybackSessionId) return;
+      attachVodPlaybackHelpers(elVideoVod);
+      await waitForStartupBuffer(elVideoVod);
+      if (sessionId !== vodPlaybackSessionId) return;
+      playVodAggressive(elVideoVod);
+    })();
     return;
   }
 
@@ -4467,14 +4593,44 @@ async function connect(): Promise<void> {
   try {
     setCatalogLoadingVisible(true, "Connexion au serveur…", "live");
     const mode: "nodecast" = "nodecast";
-    const nodecast = await tryNodecastLoginAndLoad(base, username, password);
+    const parsedBase = new URL(base);
+    const baseCandidates: string[] = [base];
+    if (!parsedBase.port) {
+      const with3000 = `${parsedBase.protocol}//${parsedBase.hostname}:3000`;
+      if (!baseCandidates.includes(with3000)) {
+        baseCandidates.push(with3000);
+      }
+    }
+    let activeBase = baseCandidates[0];
+    let nodecast:
+      | Awaited<ReturnType<typeof tryNodecastLoginAndLoad>>
+      | null = null;
+    let lastConnectError: unknown = null;
+    for (let i = 0; i < baseCandidates.length; i += 1) {
+      const candidate = baseCandidates[i]!;
+      try {
+        if (i > 0) {
+          setLoginStatus(`Connexion à Nodecast… (${new URL(candidate).host})`);
+        }
+        nodecast = await tryNodecastLoginAndLoad(candidate, username, password);
+        activeBase = candidate;
+        break;
+      } catch (err) {
+        lastConnectError = err;
+      }
+    }
+    if (!nodecast) {
+      throw (lastConnectError instanceof Error
+        ? lastConnectError
+        : new Error(String(lastConnectError ?? "Nodecast login failed.")));
+    }
     setCatalogLoadingVisible(true, "Préparation de l’accueil…", "live");
     const streamsByCat = nodecast.streamsByCat;
     const nodecastAuthHeaders = nodecast.authHeaders;
     const serverInfo: ServerInfo = {
-      url: new URL(base).hostname,
-      port: new URL(base).port || (new URL(base).protocol === "https:" ? "443" : "80"),
-      server_protocol: new URL(base).protocol.replace(":", ""),
+      url: new URL(activeBase).hostname,
+      port: new URL(activeBase).port || (new URL(activeBase).protocol === "https:" ? "443" : "80"),
+      server_protocol: new URL(activeBase).protocol.replace(":", ""),
     };
 
     await fetchAndApplyCanonicalCountries();
@@ -4487,7 +4643,7 @@ async function connect(): Promise<void> {
 
     state = {
       mode,
-      base,
+      base: activeBase,
       username,
       password,
       nodecastAuthHeaders,

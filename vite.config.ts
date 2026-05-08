@@ -66,16 +66,36 @@ function isCatalogApiTarget(targetUrl: string): boolean {
   }
 }
 
+/**
+ * Bearer tokens rotate on reconnect; hashing them into cache keys defeats dev hits.
+ * - Local npm run dev → ignore Authorization unless PROXY_SPLIT_CATALOG_CACHE_BY_AUTH=1 or PRODUCTION.
+ * - Vercel/production → keyed by Bearer (privacy).
+ * - PROXY_MERGE_CATALOG_CACHE=1 → merge all callers (⚠️ only if bouquets are globally identical).
+ */
+function catalogueProxyCacheAuthSuffix(authorization?: string): string {
+  if (process.env.PROXY_MERGE_CATALOG_CACHE?.trim() === "1") {
+    return "__merge__";
+  }
+  const forceSplit = process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1";
+  const onVercel = Boolean(process.env.VERCEL);
+  const relaxedLocal =
+    !onVercel && process.env.NODE_ENV !== "production" && !forceSplit;
+  if (relaxedLocal) {
+    return "__local-dev__";
+  }
+  const auth =
+    typeof authorization === "string" && authorization.trim()
+      ? authorization.trim()
+      : "(no-auth)";
+  return auth;
+}
+
 function catalogProxyCacheKey(
   method: string,
   targetUrl: string,
   authorization?: string,
 ): string {
-  const auth =
-    typeof authorization === "string" && authorization.trim()
-      ? authorization.trim()
-      : "(no-auth)";
-  return `${method.toUpperCase()}::${targetUrl}::${auth}`;
+  return `${method.toUpperCase()}::${stripDefaultPortHref(targetUrl)}::${catalogueProxyCacheAuthSuffix(authorization)}`;
 }
 
 

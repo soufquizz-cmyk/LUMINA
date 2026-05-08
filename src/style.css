@@ -3139,22 +3139,21 @@ a.topbar__admin-link {
 
 .video-wrapper {
   width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
   aspect-ratio: 16 / 9;
   position: relative;
-  background: linear-gradient(180deg, #14121c 0%, #0c0b12 100%);
+  background: #000;
   overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.video-wrapper video {
+.video-wrapper video,
+#video-vod {
   width: 100%;
   height: 100%;
   display: block;
   object-fit: contain;
-}
-
-#video-vod {
-  object-fit: contain;
+  background: #000;
 }
 
 .vod-controls-overlay {
@@ -3305,8 +3304,11 @@ a.topbar__admin-link {
 #vod-player-container.player-container--fullscreen .video-wrapper {
   width: 100%;
   height: 100%;
+  max-width: none !important;
   max-height: none !important;
+  margin: 0 !important;
   aspect-ratio: auto;
+  border-radius: 0;
 }
 
 #vod-player-container:fullscreen #video-vod,
@@ -5598,28 +5600,15 @@ body.vel-vod-fullscreen-active .main--velora {
 
   .main--velora .player-container .video-wrapper,
   .main--velora .player-container--vod .video-wrapper {
-    background: radial-gradient(
-        ellipse 120% 90% at 50% 45%,
-        color-mix(in srgb, var(--vel-primary, #8a2be2) 12%, #07060d) 0%,
-        #05040a 62%,
-        #020108 100%
-      ),
-      linear-gradient(180deg, #0e0c14 0%, #06050c 100%);
+    background: #000;
   }
 
-  .main--velora #video {
-    object-fit: contain;
-    width: 100%;
-    height: 100%;
-    background: transparent;
-  }
-
+  .main--velora #video,
   .main--velora #video-vod {
-    object-fit: contain;
-    object-position: center;
     width: 100%;
     height: 100%;
-    background: transparent;
+    object-fit: contain;
+    background: #000;
   }
 
   #content-view {
@@ -5654,12 +5643,9 @@ body.vel-vod-fullscreen-active .main--velora {
     width: calc(100% - 1rem);
   }
 
-  .main--velora:has(#content-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container .video-wrapper,
-  .main--velora:has(#content-view:not(.hidden)):has(#vod-player-container:not(.hidden))
-    #vod-player-container
-    .video-wrapper {
-    max-height: min(52vh, 580px);
-  }
+  /* Theater mode: keep the player at its natural 16:9 aspect ratio so we don't
+     introduce extra black bars on the sides. The player-container's own
+     max-width constrains overall width. */
 
   /* Mini lecteur (PiP) pendant la grille des bouquets */
   .main--velora:has(#packages-view:not(.hidden)):has(#player-container:not(.hidden)) #player-container.player-container {

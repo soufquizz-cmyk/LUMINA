@@ -67,27 +67,18 @@ function isCatalogApiTarget(targetUrl: string): boolean {
 }
 
 /**
- * Bearer tokens rotate on reconnect; hashing them into cache keys defeats dev hits.
- * - Local npm run dev → ignore Authorization unless PROXY_SPLIT_CATALOG_CACHE_BY_AUTH=1 or PRODUCTION.
- * - Vercel/production → keyed by Bearer (privacy).
- * - PROXY_MERGE_CATALOG_CACHE=1 → merge all callers (⚠️ only if bouquets are globally identical).
+ * One global catalogue per upstream URL (Velora assumption). All users share the same 10‑min cache entry.
+ * Set PROXY_SPLIT_CATALOG_CACHE_BY_AUTH=1 only if different Bearer tokens must get different cached JSON.
  */
 function catalogueProxyCacheAuthSuffix(authorization?: string): string {
-  if (process.env.PROXY_MERGE_CATALOG_CACHE?.trim() === "1") {
-    return "__merge__";
+  if (process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1") {
+    const auth =
+      typeof authorization === "string" && authorization.trim()
+        ? authorization.trim()
+        : "(no-auth)";
+    return auth;
   }
-  const forceSplit = process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1";
-  const onVercel = Boolean(process.env.VERCEL);
-  const relaxedLocal =
-    !onVercel && process.env.NODE_ENV !== "production" && !forceSplit;
-  if (relaxedLocal) {
-    return "__local-dev__";
-  }
-  const auth =
-    typeof authorization === "string" && authorization.trim()
-      ? authorization.trim()
-      : "(no-auth)";
-  return auth;
+  return "__merge__";
 }
 
 function catalogProxyCacheKey(

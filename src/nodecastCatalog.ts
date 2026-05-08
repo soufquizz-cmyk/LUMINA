@@ -209,10 +209,7 @@ function isUpstreamCatalogFetchTarget(urlStr: string): boolean {
 }
 
 function catalogCacheAuthFingerprint(headers?: Record<string, string>): string {
-  if (
-    import.meta.env.DEV &&
-    import.meta.env.VITE_SPLIT_CATALOG_CLIENT_CACHE_BY_AUTH !== "true"
-  ) {
+  if (import.meta.env.VITE_SPLIT_CATALOG_CLIENT_CACHE_BY_AUTH !== "true") {
     return "";
   }
   if (!headers) return "";

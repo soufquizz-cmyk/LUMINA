@@ -351,21 +351,14 @@ const MAX_CATALOG_MEMORY_CACHE_BYTES = 28 * 1024 * 1024;
 
 /** See `vite.config.ts` `catalogueProxyCacheAuthSuffix` — keep behaviour aligned. */
 function catalogueProxyCacheAuthSuffixServer(authorization?: string): string {
-  if (process.env.PROXY_MERGE_CATALOG_CACHE?.trim() === "1") {
-    return "__merge__";
+  if (process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1") {
+    const auth =
+      typeof authorization === "string" && authorization.trim()
+        ? authorization.trim()
+        : "(no-auth)";
+    return auth;
   }
-  const forceSplit = process.env.PROXY_SPLIT_CATALOG_CACHE_BY_AUTH?.trim() === "1";
-  const onVercel = Boolean(process.env.VERCEL);
-  const relaxedLocal =
-    !onVercel && process.env.NODE_ENV !== "production" && !forceSplit;
-  if (relaxedLocal) {
-    return "__local-dev__";
-  }
-  const auth =
-    typeof authorization === "string" && authorization.trim()
-      ? authorization.trim()
-      : "(no-auth)";
-  return auth;
+  return "__merge__";
 }
 
 function catalogMemoryCacheKey(

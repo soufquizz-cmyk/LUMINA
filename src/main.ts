@@ -64,6 +64,7 @@ import {
   fetchDbPackageChannelOrders,
   upsertPackageChannelOrder,
 } from "./packageChannelOrderSupabase";
+import { fetchDbPackageGridOrders, upsertPackageGridOrder } from "./packageGridOrderSupabase";
 import {
   clearPackageCoverImageKeepingThemes,
   fetchDbPackageCoverOverrides,
@@ -240,9 +241,12 @@ let streamCurationByCountry: Map<string, Map<number, string>> = new Map();
 let packageCoverOverrideById: Map<string, PackageCoverOverrideEntry> = new Map();
 /** `${country_id or cat:…}::${package_id}` → manual live channel order (stream_id sequence). */
 let packageChannelOrderByKey: Map<string, number[]> = new Map();
+/** `${country_id}::${ui_tab}` -> manual package card order (package id sequence). */
+let packageGridOrderByKey: Map<string, string[]> = new Map();
 
 const COUNTRY_STORAGE_KEY = "lumina_selected_country_id";
 const PKG_CHANNEL_ORDER_LS_PREFIX = "velora_pkg_ch_order_v1";
+const PKG_GRID_ORDER_LS_PREFIX = "velora_pkg_grid_order_v1";
 /** When `"0"`, hide + / Supabase delete in the grid (admin session only). Default = visible. */
 const ADMIN_GRID_TOOLS_KEY = "velora_admin_grid_tools";
 /** Same id as `providerLayout` « Autres » bucket — keep last in the list. */
@@ -2698,6 +2702,7 @@ async function refreshSupabaseHierarchy(): Promise<void> {
     streamCurationByCountry = new Map();
     packageCoverOverrideById = new Map();
     packageChannelOrderByKey = new Map();
+    packageGridOrderByKey = new Map();
     populateCountrySelectFromAdmin();
     return;
   }
@@ -2720,12 +2725,18 @@ async function refreshSupabaseHierarchy(): Promise<void> {
     } catch {
       packageChannelOrderByKey = new Map();
     }
+    try {
+      packageGridOrderByKey = await fetchDbPackageGridOrders(sb);
+    } catch {
+      packageGridOrderByKey = new Map();
+    }
   } catch {
     dbAdminCountries = [];
     dbAdminPackages = [];
     streamCurationByCountry = new Map();
     packageCoverOverrideById = new Map();
     packageChannelOrderByKey = new Map();
+    packageGridOrderByKey = new Map();
   }
   populateCountrySelectFromAdmin();
 }
@@ -2797,6 +2808,88 @@ function mergedPackagesForGrid(): AdminPackage[] {
     }
   }
   return base.sort((a, b) => a.name.localeCompare(b.name, "fr"));
+}
+
+function packageGridOrderMapKey(tab: UiTab): string | null {
+  const db = resolvedDbCountryIdForAdminPackages();
+  if (!db) return null;
+  return `${db}::${tab}`;
+}
+
+function loadPackageGridOrderFromLocalStorage(mapKey: string): string[] | null {
+  try {
+    const raw = localStorage.getItem(`${PKG_GRID_ORDER_LS_PREFIX}:${mapKey}`);
+    if (!raw) return null;
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return null;
+    return arr
+      .map((x) => String(x).trim())
+      .filter((x) => x.length > 0);
+  } catch {
+    return null;
+  }
+}
+
+function savePackageGridOrderToLocalStorage(mapKey: string, packageIds: string[]): void {
+  try {
+    localStorage.setItem(`${PKG_GRID_ORDER_LS_PREFIX}:${mapKey}`, JSON.stringify(packageIds));
+  } catch {
+    /* ignore */
+  }
+}
+
+function getSavedPackageGridOrder(tab: UiTab): string[] | null {
+  const key = packageGridOrderMapKey(tab);
+  if (!key) return null;
+  const fromMap = packageGridOrderByKey.get(key);
+  if (fromMap?.length) return fromMap;
+  return loadPackageGridOrderFromLocalStorage(key);
+}
+
+function applySavedPackageGridOrder(pkgs: AdminPackage[], saved: string[] | null): AdminPackage[] {
+  if (!saved?.length) return pkgs;
+  const byId = new Map(pkgs.map((p) => [p.id, p]));
+  const ordered: AdminPackage[] = [];
+  const used = new Set<string>();
+  for (const id of saved) {
+    const p = byId.get(id);
+    if (p) {
+      ordered.push(p);
+      used.add(id);
+    }
+  }
+  const rest = pkgs.filter((p) => !used.has(p.id));
+  return [...ordered, ...rest];
+}
+
+function reorderVisiblePackageIds(ids: string[], fromIdx: number, toIdx: number, insertBefore: boolean): string[] {
+  const next = [...ids];
+  const [moved] = next.splice(fromIdx, 1);
+  let ins = insertBefore ? toIdx : toIdx + 1;
+  if (fromIdx < ins) ins--;
+  next.splice(ins, 0, moved);
+  return next;
+}
+
+async function persistPackageGridOrder(tab: UiTab, packageIds: string[]): Promise<void> {
+  const mapKey = packageGridOrderMapKey(tab);
+  if (!mapKey) return;
+  packageGridOrderByKey.set(mapKey, packageIds);
+  savePackageGridOrderToLocalStorage(mapKey, packageIds);
+  const sb = getSupabaseClient();
+  if (!sb) return;
+  const cid = resolvedDbCountryIdForAdminPackages();
+  if (!cid) return;
+  const res = await upsertPackageGridOrder(sb, {
+    country_id: cid,
+    ui_tab: tab,
+    package_order: packageIds,
+  });
+  if (res.error) {
+    flashCurateStatus(`Ordre des packages (local OK) — Supabase : ${res.error}`, true);
+  } else {
+    flashCurateStatus("Ordre des packages enregistré.", false);
+  }
 }
 
 type PackageThemeKey = "theme_bg" | "theme_surface" | "theme_primary" | "theme_glow" | "theme_back";
@@ -3004,6 +3097,79 @@ function wirePackageCardArtFit(img: HTMLImageElement): void {
   if (img.complete) queueMicrotask(apply);
 }
 
+function wirePackageCardDragReorder(card: HTMLElement, packageId: string, packageName: string): void {
+  const drag = document.createElement("button");
+  drag.type = "button";
+  drag.className = "vel-package-drag-handle";
+  drag.title = "Glisser pour réorganiser";
+  drag.setAttribute("aria-label", `Réorganiser ${packageName}`);
+  const grip = document.createElement("span");
+  grip.className = "vel-package-drag-handle__grip";
+  grip.setAttribute("aria-hidden", "true");
+  grip.textContent = "⠿";
+  drag.appendChild(grip);
+  card.appendChild(drag);
+  let allowDrag = false;
+  drag.addEventListener("mousedown", () => {
+    allowDrag = true;
+  });
+  drag.addEventListener("mouseup", () => {
+    allowDrag = false;
+  });
+  card.draggable = true;
+  card.addEventListener("dragstart", (e) => {
+    if (!allowDrag) {
+      e.preventDefault();
+      return;
+    }
+    allowDrag = false;
+    card.classList.add("vel-package-card--dragging");
+    e.dataTransfer?.setData("text/plain", packageId);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  });
+  card.addEventListener("dragend", () => {
+    card.classList.remove("vel-package-card--dragging");
+    elPackagesView.querySelectorAll(".vel-package-card--drop-target").forEach((el) => {
+      el.classList.remove("vel-package-card--drop-target");
+    });
+  });
+  card.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const rect = card.getBoundingClientRect();
+    const before = e.clientX < rect.left + rect.width / 2;
+    card.classList.add("vel-package-card--drop-target");
+    card.dataset.dropBefore = before ? "1" : "0";
+  });
+  card.addEventListener("dragleave", (e) => {
+    const rel = e.relatedTarget as Node | null;
+    if (rel && card.contains(rel)) return;
+    card.classList.remove("vel-package-card--drop-target");
+    delete card.dataset.dropBefore;
+  });
+  card.addEventListener("drop", (e) => {
+    e.preventDefault();
+    card.classList.remove("vel-package-card--drop-target");
+    const draggedId = (e.dataTransfer?.getData("text/plain") ?? "").trim();
+    if (!draggedId) return;
+    const rect = card.getBoundingClientRect();
+    const before = e.clientX < rect.left + rect.width / 2;
+    delete card.dataset.dropBefore;
+    const cards = [...elPackagesView.querySelectorAll<HTMLElement>(".vel-package-card[data-package-id]")];
+    const visibleIds = cards
+      .map((x) => (x.dataset.packageId ?? "").trim())
+      .filter((x) => x.length > 0);
+    const fromIdx = visibleIds.indexOf(draggedId);
+    const toIdx = visibleIds.indexOf(packageId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const reordered = reorderVisiblePackageIds(visibleIds, fromIdx, toIdx, before);
+    void (async () => {
+      await persistPackageGridOrder(uiTab, reordered);
+      renderPackagesGrid();
+    })();
+  });
+}
+
 function renderPackagesGrid(): void {
   elPackagesView.innerHTML = "";
   const st = state;
@@ -3034,10 +3200,11 @@ function renderPackagesGrid(): void {
     Boolean(getSupabaseClient()) &&
     readAdminGridToolsEnabled() &&
     isPackagesGridTab();
+  const showAdminGridReorder = showAdminPackageImageTools;
   const showAdminLiveGridExtras = showAdminPackageImageTools && uiTab === "live";
   if (showAdminLiveGridExtras) appendAddPackageCard();
 
-  const pkgs = mergedPackagesForGrid();
+  const pkgs = applySavedPackageGridOrder(mergedPackagesForGrid(), getSavedPackageGridOrder(uiTab));
   for (const pkg of pkgs) {
     const isDb = isLikelyUuid(pkg.id);
     const matched = streamsForPackageCoverFallback(pkg.id);
@@ -3083,6 +3250,9 @@ function renderPackagesGrid(): void {
           void deleteDbPackageById(pkg.id);
         });
         card.appendChild(del);
+      }
+      if (showAdminGridReorder) {
+        wirePackageCardDragReorder(card, pkg.id, pkg.name);
       }
 
       const cover = pkg.cover_url?.trim();
@@ -3155,7 +3325,11 @@ function renderPackagesGrid(): void {
       card.appendChild(title);
 
       card.addEventListener("click", (ev) => {
-        if ((ev.target as HTMLElement).closest(".admin-pkg-del-sb, .admin-pkg-edit-sb"))
+        if (
+          (ev.target as HTMLElement).closest(
+            ".admin-pkg-del-sb, .admin-pkg-edit-sb, .vel-package-drag-handle"
+          )
+        )
           return;
         openAdminPackage(pkg.id);
       });
@@ -3191,6 +3365,9 @@ function renderPackagesGrid(): void {
         openPackageCoverEditDialog(pkg);
       });
       card.appendChild(edit);
+    }
+    if (showAdminGridReorder) {
+      wirePackageCardDragReorder(card, pkg.id, pkg.name);
     }
 
     const httpsOverride = httpsCatalogCoverOverride(pkg.id);
@@ -3245,7 +3422,7 @@ function renderPackagesGrid(): void {
     card.appendChild(title);
 
     card.addEventListener("click", (ev) => {
-      if ((ev.target as HTMLElement).closest(".admin-pkg-edit-sb")) return;
+      if ((ev.target as HTMLElement).closest(".admin-pkg-edit-sb, .vel-package-drag-handle")) return;
       openAdminPackage(pkg.id);
     });
     elPackagesView.appendChild(card);

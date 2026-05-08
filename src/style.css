@@ -3192,6 +3192,52 @@ a.topbar__admin-link {
     0 10px 28px rgba(0, 0, 0, 0.24);
 }
 
+.vel-package-drag-handle {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.45rem;
+  z-index: 4;
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--vel-surface, #1a1520) 82%, transparent);
+  color: color-mix(in srgb, var(--vel-text, #fff) 80%, transparent);
+  cursor: grab;
+  user-select: none;
+}
+
+.vel-package-drag-handle:hover,
+.vel-package-drag-handle:focus-visible {
+  background: color-mix(in srgb, var(--vel-surface, #1a1520) 95%, transparent);
+  color: var(--vel-text, #fff);
+  outline: none;
+}
+
+.vel-package-drag-handle:active,
+.vel-package-card--dragging .vel-package-drag-handle {
+  cursor: grabbing;
+}
+
+.vel-package-drag-handle__grip {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.vel-package-card--dragging {
+  opacity: 0.86;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vel-primary, #8a2be2) 45%, transparent),
+    0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+.vel-package-card--drop-target {
+  outline: 2px dashed color-mix(in srgb, var(--vel-primary, #8a2be2) 70%, transparent);
+  outline-offset: 2px;
+}
+
 .vel-package-card img {
   position: absolute;
   inset: 0;

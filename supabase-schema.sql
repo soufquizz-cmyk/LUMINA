@@ -157,6 +157,25 @@ drop policy if exists "open read/write admin_package_channel_order" on public.ad
 create policy "open read/write admin_package_channel_order"
 on public.admin_package_channel_order for all to anon, authenticated using (true) with check (true);
 
+-- Ordre manuel des packages (grille bouquets admin), par pays + onglet.
+create table if not exists public.admin_country_package_order (
+  country_id uuid not null references public.admin_countries (id) on delete cascade,
+  ui_tab text not null default 'live',
+  package_order text[] not null default '{}',
+  updated_at timestamptz not null default now(),
+  primary key (country_id, ui_tab)
+);
+
+create index if not exists admin_country_package_order_country_id_idx
+  on public.admin_country_package_order (country_id);
+
+alter table public.admin_country_package_order enable row level security;
+
+drop policy if exists "open read/write admin_country_package_order" on public.admin_country_package_order;
+
+create policy "open read/write admin_country_package_order"
+on public.admin_country_package_order for all to anon, authenticated using (true) with check (true);
+
 -- Images de bouquets hors `admin_packages` (catégories fournisseur, ex. velagg:fr:bein) ou surcharges explicites.
 create table if not exists public.admin_package_covers (
   package_id text primary key,

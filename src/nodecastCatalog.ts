@@ -252,10 +252,9 @@ export async function fetchProxiedJsonWithInit<T>(
     try {
       const serial = JSON.stringify(parsed);
       if (serial.length > 0 && serial.length <= MAX_CATALOG_JSON_CLIENT_UTF16) {
-        catalogJsonMemoryCacheByKey.set(cacheKey, {
-          expiresAt: Date.now() + CATALOG_JSON_CLIENT_CACHE_MS,
-          payload: JSON.parse(serial) as unknown,
-        });
+        const frozen = JSON.parse(serial) as unknown;
+        const expiresAt = Date.now() + CATALOG_JSON_CLIENT_CACHE_MS;
+        catalogJsonMemoryCacheByKey.set(cacheKey, { expiresAt, payload: frozen });
       }
     } catch {
       /* ignore oversized or non-serializable */

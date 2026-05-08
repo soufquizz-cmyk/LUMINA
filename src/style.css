@@ -2343,6 +2343,7 @@ a.topbar__admin-link {
   border-color: rgba(56, 189, 248, 0.22);
 }
 
+
 /*
  * Grille films : #dynamic-list a aussi .item-list (1 col) plus bas dans ce fichier —
  * utiliser un sélecteur plus prioritaire pour ne pas être écrasé.
@@ -2988,6 +2989,128 @@ a.topbar__admin-link {
 
 #video-vod {
   object-fit: contain;
+}
+
+.vod-controls-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  padding: 0.8rem calc(0.8rem + env(safe-area-inset-right, 0px)) calc(0.75rem + env(safe-area-inset-bottom, 0px))
+    calc(0.8rem + env(safe-area-inset-left, 0px));
+  background: linear-gradient(to top, rgba(7, 8, 14, 0.94) 2%, rgba(7, 8, 14, 0.55) 42%, rgba(7, 8, 14, 0.06) 100%);
+  pointer-events: auto;
+  opacity: 1;
+  transition: opacity 0.22s ease;
+}
+
+.vod-controls-overlay.hidden {
+  display: none !important;
+}
+
+.vod-controls-overlay.vod-controls-overlay--idle {
+  opacity: 0.05;
+}
+
+.vod-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.vod-ctl-btn {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.56);
+  color: rgba(248, 250, 252, 0.96);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  line-height: 0;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.vod-ctl-btn:hover {
+  background: rgba(30, 41, 59, 0.72);
+  border-color: rgba(167, 139, 250, 0.72);
+}
+
+.vod-ctl-btn:active {
+  transform: scale(0.96);
+}
+
+.vod-ctl-btn:focus-visible,
+.vod-ctl-seek-track:focus-visible {
+  outline: 2px solid rgba(167, 139, 250, 0.95);
+  outline-offset: 2px;
+}
+
+.vod-ctl-icon {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+}
+
+.vod-ctl-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.vod-ctl-time {
+  font-size: 0.77rem;
+  color: rgba(241, 245, 249, 0.96);
+  min-width: 4.65rem;
+  text-align: center;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.vod-ctl-seek-track {
+  position: relative;
+  flex: 1;
+  min-width: 5rem;
+  height: 0.34rem;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.52);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.vod-ctl-seek-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4f46e5 0%, #7c3aed 62%, #a78bfa 100%);
+}
+
+.vod-ctl-seek-handle {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  background: #f8fafc;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.35), 0 2px 8px rgba(15, 23, 42, 0.7);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+#vod-player-container:fullscreen .vod-controls-overlay,
+#vod-player-container:-webkit-full-screen .vod-controls-overlay {
+  padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+  padding-right: calc(1rem + env(safe-area-inset-right, 0px));
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
 }
 
 .player-buffering {

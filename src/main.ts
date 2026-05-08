@@ -33,6 +33,8 @@ import {
   resolveNodecastStreamUrl,
   resolveNodecastVodStreamUrl,
   resolveNodecastSeriesPlayableUrl,
+  createNodecastVodTranscodeSession,
+  getNodecastTranscodeSessionMeta,
   fetchNodecastVodInfo,
   fetchNodecastSeriesInfo,
   pingNodecastSourcesStatus,
@@ -40,6 +42,7 @@ import {
   imageUrlForDisplay,
   normalizeServerInput,
   sameOrigin,
+  type NodecastTranscodeSessionMeta,
   type SeriesEpisodeListItem,
 } from "./nodecastCatalog";
 import {
@@ -114,6 +117,15 @@ if (elVideoVod) {
 const elVodPlayerContainer = document.getElementById("vod-player-container") as HTMLElement | null;
 const elNowPlayingVod = document.getElementById("now-playing-vod") as HTMLDivElement | null;
 const elVodPlayerBuffering = document.getElementById("vod-player-buffering") as HTMLDivElement | null;
+const elVodControlsOverlay = document.getElementById("vod-controls-overlay") as HTMLDivElement | null;
+const elVodCtlPlay = document.getElementById("vod-ctl-play") as HTMLButtonElement | null;
+const elVodCtlSeekTrack = document.getElementById("vod-ctl-seek-track") as HTMLDivElement | null;
+const elVodCtlSeekFill = document.getElementById("vod-ctl-seek-fill") as HTMLDivElement | null;
+const elVodCtlSeekHandle = document.getElementById("vod-ctl-seek-handle") as HTMLDivElement | null;
+const elVodCtlCurrent = document.getElementById("vod-ctl-current") as HTMLSpanElement | null;
+const elVodCtlDuration = document.getElementById("vod-ctl-duration") as HTMLSpanElement | null;
+const elVodCtlMute = document.getElementById("vod-ctl-mute") as HTMLButtonElement | null;
+const elVodCtlFullscreen = document.getElementById("vod-ctl-fullscreen") as HTMLButtonElement | null;
 const elBtnCloseVodPlayer = document.getElementById("btn-close-vod-player") as HTMLButtonElement | null;
 const elPlayerBuffering = document.getElementById("player-buffering") as HTMLDivElement | null;
 const elNowPlaying = $("#now-playing") as HTMLDivElement;
@@ -537,8 +549,8 @@ const HLS_VOD_CONFIG_BASE = {
   fragLoadingMaxRetryTimeout: 8000,
   enableWorker: true,
   initialLiveManifestSize: 1,
-  /** Sliding-window transcode playlists are `live`; keep MSE duration unbounded so playback does not “end” early. */
-  liveDurationInfinity: true,
+  liveDurationInfinity: false,
+  lowLatencyMode: false,
 } as const;
 
 const VOD_STALL_RETRY_DELAY_MS = 2200;
@@ -566,6 +578,21 @@ let lastVodUpstreamAuth: Record<string, string> | undefined;
 let vodRemountAttempts = 0;
 let vodLastRemountTs = 0;
 let vodPlaybackSessionId = 0;
+let currentTranscodeSessionId: string | null = null;
+let currentVodSourceUrl: string | null = null;
+let currentVodStartAt = 0;
+let currentVodDurationSeconds: number | null = null;
+let currentVodSeekable = false;
+let currentVodVideoMode: string | undefined;
+let currentVodVideoCodec: string | undefined;
+let currentVodAudioCodec: string | undefined;
+let currentVodAudioChannels: number | undefined;
+let vodSeekInFlight = false;
+let isVodTranscode = false;
+let isVodTranscodeSeeking = false;
+let suppressNativeSeekingHandler = false;
+let isVodSeekDragging = false;
+let lastVodUiLogSecond = -1;
 
 function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): void {
   void status;
@@ -574,6 +601,130 @@ function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): v
 
 function stopVodFakeLoadingOverlay(): void {
   setVodPlayerBufferingVisible(false);
+}
+
+function formatDurationHms(secondsRaw: number): string {
+  const seconds = Math.max(0, Math.floor(secondsRaw));
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  if (h > 0) return `${String(h).padStart(2, "0")}:${mm}:${ss}`;
+  return `00:${mm}:${ss}`;
+}
+
+const VOD_CONTROL_ICONS = {
+  play:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12l10-6z" fill="currentColor"/></svg>',
+  pause:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="6" width="4" height="12" rx="1.1" fill="currentColor"/><rect x="13" y="6" width="4" height="12" rx="1.1" fill="currentColor"/></svg>',
+  volume:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10H4z" fill="currentColor"/><path d="M16.5 8.2a1 1 0 0 1 1.4 0A6 6 0 0 1 19.5 12a6 6 0 0 1-1.6 3.8 1 1 0 1 1-1.5-1.3A4 4 0 0 0 17.5 12a4 4 0 0 0-1.1-2.5 1 1 0 0 1 .1-1.3z" fill="currentColor"/></svg>',
+  muted:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10H4z" fill="currentColor"/><path d="M16 9l5 5M21 9l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  fullscreen:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v4m14-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m13-5v4a1 1 0 0 1-1 1h-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  fullscreenExit:
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9H4m0 0V4m0 5l6-6m5 6h5m0 0V4m0 5l-6-6M9 15H4m0 0v5m0-5l6 6m5-6h5m0 0v5m0-5l-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+} as const;
+
+function setVodControlIcon(button: HTMLButtonElement | null, svgMarkup: string, ariaLabel: string): void {
+  if (!button) return;
+  button.innerHTML = `<span class="vod-ctl-icon">${svgMarkup}</span>`;
+  button.setAttribute("aria-label", ariaLabel);
+  button.title = ariaLabel;
+}
+
+function setVodSeekVisualPercent(percentRaw: number): void {
+  if (!elVodCtlSeekFill || !elVodCtlSeekHandle || !elVodCtlSeekTrack) return;
+  const percent = Math.max(0, Math.min(1, percentRaw));
+  const percentLabel = `${(percent * 100).toFixed(3)}%`;
+  elVodCtlSeekFill.style.width = percentLabel;
+  elVodCtlSeekHandle.style.left = percentLabel;
+  elVodCtlSeekTrack.setAttribute("aria-valuenow", String(Math.round(percent * 100)));
+}
+
+function resetVodTranscodeState(): void {
+  currentTranscodeSessionId = null;
+  currentVodSourceUrl = null;
+  currentVodStartAt = 0;
+  currentVodDurationSeconds = null;
+  currentVodSeekable = false;
+  currentVodVideoMode = undefined;
+  currentVodVideoCodec = undefined;
+  currentVodAudioCodec = undefined;
+  currentVodAudioChannels = undefined;
+  isVodTranscode = false;
+  vodSeekInFlight = false;
+  setVodSeekVisualPercent(0);
+}
+
+function applyVodTranscodeSessionMeta(meta: NodecastTranscodeSessionMeta | null): void {
+  if (!meta) {
+    resetVodTranscodeState();
+    return;
+  }
+  currentTranscodeSessionId = meta.sessionId;
+  currentVodSourceUrl = meta.sourceUrl;
+  currentVodStartAt = Number.isFinite(meta.startAt) ? Math.max(0, meta.startAt) : 0;
+  currentVodDurationSeconds =
+    typeof meta.durationSeconds === "number" && Number.isFinite(meta.durationSeconds)
+      ? Math.max(0, meta.durationSeconds)
+      : null;
+  currentVodSeekable = Boolean(meta.seekable);
+  currentVodVideoMode = meta.videoMode;
+  currentVodVideoCodec = meta.videoCodec;
+  currentVodAudioCodec = meta.audioCodec;
+  currentVodAudioChannels = meta.audioChannels;
+}
+
+function getRealVodCurrentTime(video: HTMLVideoElement): number {
+  const t = Number.isFinite(video.currentTime) ? Math.max(0, video.currentTime) : 0;
+  return Math.max(0, currentVodStartAt + t);
+}
+
+function getRealVodDuration(video: HTMLVideoElement): number {
+  if (typeof currentVodDurationSeconds === "number" && Number.isFinite(currentVodDurationSeconds)) {
+    return Math.max(0, currentVodDurationSeconds);
+  }
+  return Number.isFinite(video.duration) ? Math.max(0, video.duration) : 0;
+}
+
+function updateVodProgressUi(video: HTMLVideoElement): void {
+  const realDuration = getRealVodDuration(video);
+  const realCurrent = getRealVodCurrentTime(video);
+  if (!(realDuration > 0)) return;
+  if (isVodTranscode && elVodCtlCurrent && elVodCtlDuration) {
+    elVodCtlCurrent.textContent = formatDurationHms(realCurrent);
+    elVodCtlDuration.textContent = formatDurationHms(realDuration);
+    if (!isVodSeekDragging) {
+      const pct = Math.min(1, Math.max(0, realCurrent / realDuration));
+      setVodSeekVisualPercent(pct);
+    }
+  }
+  const nowSecond = Math.floor(realCurrent);
+  if (nowSecond !== lastVodUiLogSecond) {
+    lastVodUiLogSecond = nowSecond;
+    console.log("[VOD UI] currentVodStartAt", currentVodStartAt);
+    console.log("[VOD UI] video.currentTime", Number.isFinite(video.currentTime) ? video.currentTime : 0);
+    console.log("[VOD UI] realCurrentTime", realCurrent);
+    console.log("[VOD UI] duration", currentVodDurationSeconds);
+  }
+}
+
+function isVodNodecastTranscodeSession(): boolean {
+  return Boolean(currentTranscodeSessionId && currentVodSourceUrl);
+}
+
+function syncVodControlVisibility(video: HTMLVideoElement): void {
+  isVodTranscode = isVodNodecastTranscodeSession();
+  video.controls = !isVodTranscode;
+  if (elVodControlsOverlay) {
+    elVodControlsOverlay.classList.toggle("hidden", !isVodTranscode);
+    if (!isVodTranscode) elVodControlsOverlay.classList.remove("vod-controls-overlay--idle");
+    elVodControlsOverlay.setAttribute("aria-hidden", isVodTranscode ? "false" : "true");
+  }
 }
 
 function teardownVodPlaybackHelpers(): void {
@@ -784,6 +935,132 @@ function tryRemountVodHls(video: HTMLVideoElement): boolean {
   return true;
 }
 
+async function seekVodTranscodeTo(video: HTMLVideoElement, targetSeconds: number): Promise<void> {
+  const logVodSeekGuard = (reason: string): void => {
+    console.log("[VOD SEEK GUARD]", {
+      reason,
+      isVodTranscode,
+      currentVodSourceUrl,
+      currentVodSeekable,
+      currentVodDurationSeconds,
+      currentTranscodeSessionId,
+      isVodTranscodeSeeking,
+    });
+  };
+  if (!state) {
+    logVodSeekGuard("missing state");
+    return;
+  }
+  if (!isVodNodecastTranscodeSession()) {
+    logVodSeekGuard("not transcode session");
+    return;
+  }
+  if (!currentVodSourceUrl) {
+    logVodSeekGuard("missing currentVodSourceUrl");
+    return;
+  }
+  if (vodSeekInFlight || isVodTranscodeSeeking) {
+    logVodSeekGuard("seek already in flight");
+    return;
+  }
+  if (!currentVodDurationSeconds || !Number.isFinite(currentVodDurationSeconds)) {
+    logVodSeekGuard("missing currentVodDurationSeconds");
+    return;
+  }
+  const maxTarget = Math.max(0, currentVodDurationSeconds - 2);
+  const clamped = Math.max(0, Math.min(targetSeconds, maxTarget));
+  console.log("[VOD SEEK CLICK] targetSeconds", clamped);
+  console.log("[VOD SEEK] POST startAt", clamped);
+  vodSeekInFlight = true;
+  isVodTranscodeSeeking = true;
+  try {
+    const oldSessionId = currentTranscodeSessionId;
+    console.log("[VOD SEEK] oldSessionId", oldSessionId);
+    suppressNativeSeekingHandler = true;
+    try {
+      video.pause();
+    } catch {
+      /* ignore */
+    }
+    startVodFakeLoadingOverlay(`Preparing from ${formatDurationHms(clamped)}...`);
+    if (hlsVod) {
+      try {
+        hlsVod.stopLoad();
+      } catch {
+        /* ignore */
+      }
+      try {
+        hlsVod.detachMedia();
+      } catch {
+        /* ignore */
+      }
+      try {
+        hlsVod.destroy();
+      } catch {
+        /* ignore */
+      }
+      hlsVod = null;
+    }
+    video.removeAttribute("src");
+    video.src = "";
+    video.load();
+
+    const session = await createNodecastVodTranscodeSession(
+      state.base,
+      currentVodSourceUrl,
+      state.nodecastAuthHeaders,
+      {
+        mode: "vod",
+        startAt: clamped,
+        seekOffset: clamped,
+        videoMode: currentVodVideoMode,
+        videoCodec: currentVodVideoCodec,
+        audioCodec: currentVodAudioCodec,
+        audioChannels: currentVodAudioChannels,
+      }
+    );
+    if (!session || !elVideoVod) {
+      logVodSeekGuard("session creation failed");
+      return;
+    }
+    console.log("[VOD SEEK] new sessionId", session.sessionId);
+    applyVodTranscodeSessionMeta({
+      ...session,
+      durationSeconds: session.durationSeconds ?? currentVodDurationSeconds,
+    });
+    const proxied = proxiedUrl(session.playlistUrl);
+    console.log("[VOD SEEK] new playlistUrl", session.playlistUrl);
+    lastVodProxiedUrl = proxied;
+    mountHlsVod(proxied, video, state.nodecastAuthHeaders, {
+      autoPlayOnManifest: true,
+    });
+    const clearSuppress = (): void => {
+      suppressNativeSeekingHandler = false;
+      video.removeEventListener("loadedmetadata", clearSuppress);
+      video.removeEventListener("canplay", clearSuppress);
+    };
+    video.addEventListener("loadedmetadata", clearSuppress);
+    video.addEventListener("canplay", clearSuppress);
+    syncVodControlVisibility(video);
+    attachVodPlaybackHelpers(video);
+    updateVodProgressUi(video);
+    void video.play().catch(() => {});
+    if (oldSessionId && oldSessionId !== currentTranscodeSessionId) {
+      const delUrl = `${state.base.replace(/\/+$/, "")}/api/transcode/${encodeURIComponent(oldSessionId)}`;
+      void fetch(proxiedUrl(delUrl), {
+        method: "DELETE",
+        headers: state.nodecastAuthHeaders,
+      }).catch(() => {});
+    }
+  } finally {
+    vodSeekInFlight = false;
+    isVodTranscodeSeeking = false;
+    window.setTimeout(() => {
+      suppressNativeSeekingHandler = false;
+    }, 2500);
+  }
+}
+
 function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
   teardownVodPlaybackHelpers();
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
@@ -801,14 +1078,15 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
 
   const updateProgressClock = (): void => {
     const now = Date.now();
-    const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const t = getRealVodCurrentTime(video);
     if (t > lastTime + 0.02) {
       lastProgressTs = now;
       lastTime = t;
       return;
     }
     if (video.seeking) return;
-    const d = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+    const realDuration = getRealVodDuration(video);
+    const d = realDuration > 0 ? realDuration : Number.POSITIVE_INFINITY;
     if (t >= d) return;
     if (now - lastProgressTs >= VOD_WATCHDOG_STALL_MS) {
       setVodPlayerBufferingVisible(true);
@@ -834,8 +1112,9 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
       vodStallRetryTimer = null;
       if (!hlsVod) return;
       if (video.seeking) return;
-      const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-      const d = Number.isFinite(video.duration) ? video.duration : Number.POSITIVE_INFINITY;
+      const t = getRealVodCurrentTime(video);
+      const realDuration = getRealVodDuration(video);
+      const d = realDuration > 0 ? realDuration : Number.POSITIVE_INFINITY;
       if (t >= d) return;
       forceStartLoad();
     }, VOD_STALL_RETRY_DELAY_MS);
@@ -860,26 +1139,174 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     stopVodFakeLoadingOverlay();
     cancelStallRetry();
     lastProgressTs = Date.now();
-    lastTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    lastTime = getRealVodCurrentTime(video);
     forceStartLoad();
   };
 
   const onTimeUpdate = (): void => {
-    const t = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const t = getRealVodCurrentTime(video);
     if (t > lastTime) lastTime = t;
     lastProgressTs = Date.now();
+    updateVodProgressUi(video);
+  };
+
+  const onSeeking = (): void => {
+    if (suppressNativeSeekingHandler) return;
+    if (isVodTranscode) return;
+  };
+
+  const onKeyDown = (ev: KeyboardEvent): void => {
+    if (!currentVodSeekable || !currentVodSourceUrl) return;
+    if (vodSeekInFlight) return;
+    let delta = 0;
+    if (ev.key === "ArrowRight" || ev.key.toLowerCase() === "l") delta = 10;
+    if (ev.key === "ArrowLeft" || ev.key.toLowerCase() === "j") delta = -10;
+    if (!delta) return;
+    ev.preventDefault();
+    const realDuration = getRealVodDuration(video);
+    const base = getRealVodCurrentTime(video);
+    const target = realDuration > 0 ? Math.min(Math.max(0, base + delta), realDuration) : Math.max(0, base + delta);
+    void seekVodTranscodeTo(video, target);
   };
 
   const onLoadedData = (): void => {
     forceStartLoad();
+    updateVodProgressUi(video);
   };
 
   video.addEventListener("waiting", onWaiting);
   video.addEventListener("playing", onPlaying);
   video.addEventListener("stalled", onStalled);
   video.addEventListener("timeupdate", onTimeUpdate);
+  video.addEventListener("seeking", onSeeking);
+  video.addEventListener("keydown", onKeyDown);
   video.addEventListener("loadeddata", onLoadedData);
   video.addEventListener("error", onError);
+
+  const seekFromPointerEvent = (event: PointerEvent | MouseEvent): void => {
+    if (!isVodTranscode || !elVodCtlSeekTrack) return;
+    if (!currentVodDurationSeconds || !Number.isFinite(currentVodDurationSeconds)) return;
+    const rect = elVodCtlSeekTrack.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const percent = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const targetSeconds = percent * currentVodDurationSeconds;
+    console.log("[VOD CTRL] pointer percent", percent);
+    console.log("[VOD CTRL] targetSeconds", targetSeconds);
+    setVodSeekVisualPercent(percent);
+    void seekVodTranscodeTo(video, targetSeconds);
+  };
+  const updateDragPercent = (event: PointerEvent): void => {
+    if (!isVodTranscode || !elVodCtlSeekTrack) return;
+    if (!currentVodDurationSeconds || !Number.isFinite(currentVodDurationSeconds)) return;
+    const rect = elVodCtlSeekTrack.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const percent = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    setVodSeekVisualPercent(percent);
+    console.log("[VOD CTRL] pointer percent", percent);
+  };
+  const onSeekTrackClick = (event: MouseEvent): void => {
+    if (isVodSeekDragging) return;
+    if (event.detail === 0) return;
+    if (elVodCtlSeekTrack?.dataset.skipClick === "1") {
+      elVodCtlSeekTrack.dataset.skipClick = "0";
+      return;
+    }
+    seekFromPointerEvent(event);
+  };
+  const onSeekTrackPointerDown = (event: PointerEvent): void => {
+    if (!elVodCtlSeekTrack) return;
+    isVodSeekDragging = true;
+    elVodCtlSeekTrack.setPointerCapture?.(event.pointerId);
+    updateDragPercent(event);
+  };
+  const onSeekTrackPointerMove = (event: PointerEvent): void => {
+    if (!isVodSeekDragging) return;
+    updateDragPercent(event);
+  };
+  const onSeekTrackPointerUp = (event: PointerEvent): void => {
+    if (!elVodCtlSeekTrack) return;
+    if (!isVodSeekDragging) return;
+    isVodSeekDragging = false;
+    elVodCtlSeekTrack.dataset.skipClick = "1";
+    elVodCtlSeekTrack.releasePointerCapture?.(event.pointerId);
+    seekFromPointerEvent(event);
+  };
+  const onSeekTrackPointerCancel = (event: PointerEvent): void => {
+    if (!elVodCtlSeekTrack) return;
+    isVodSeekDragging = false;
+    elVodCtlSeekTrack.releasePointerCapture?.(event.pointerId);
+  };
+  const onCtlPlay = (): void => {
+    if (!isVodTranscode) return;
+    if (video.paused) void video.play().catch(() => {});
+    else video.pause();
+  };
+  const onCtlMute = (): void => {
+    if (!isVodTranscode) return;
+    video.muted = !video.muted;
+    setVodControlIcon(
+      elVodCtlMute,
+      video.muted ? VOD_CONTROL_ICONS.muted : VOD_CONTROL_ICONS.volume,
+      video.muted ? "Unmute" : "Mute"
+    );
+  };
+  const onCtlFullscreen = (): void => {
+    if (!isVodTranscode) return;
+    const host = elVodPlayerContainer ?? video;
+    if (!document.fullscreenElement) void host.requestFullscreen?.().catch(() => {});
+    else void document.exitFullscreen?.().catch(() => {});
+  };
+  const onFullscreenChange = (): void => {
+    const inFullscreen = Boolean(document.fullscreenElement);
+    setVodControlIcon(
+      elVodCtlFullscreen,
+      inFullscreen ? VOD_CONTROL_ICONS.fullscreenExit : VOD_CONTROL_ICONS.fullscreen,
+      inFullscreen ? "Exit fullscreen" : "Fullscreen"
+    );
+  };
+  const onPlayPauseSync = (): void => {
+    setVodControlIcon(
+      elVodCtlPlay,
+      video.paused ? VOD_CONTROL_ICONS.play : VOD_CONTROL_ICONS.pause,
+      video.paused ? "Play" : "Pause"
+    );
+    setVodControlIcon(
+      elVodCtlMute,
+      video.muted ? VOD_CONTROL_ICONS.muted : VOD_CONTROL_ICONS.volume,
+      video.muted ? "Unmute" : "Mute"
+    );
+    onFullscreenChange();
+  };
+  let overlayIdleTimer: number | null = null;
+  const markVodControlsActive = (): void => {
+    if (!elVodControlsOverlay || !isVodTranscode) return;
+    elVodControlsOverlay.classList.remove("vod-controls-overlay--idle");
+    if (overlayIdleTimer != null) window.clearTimeout(overlayIdleTimer);
+    overlayIdleTimer = window.setTimeout(() => {
+      if (!video.paused && !isVodSeekDragging) {
+        elVodControlsOverlay?.classList.add("vod-controls-overlay--idle");
+      }
+    }, 2100);
+  };
+  if (elVodCtlSeekTrack) {
+    elVodCtlSeekTrack.addEventListener("click", onSeekTrackClick);
+    elVodCtlSeekTrack.addEventListener("pointerdown", onSeekTrackPointerDown);
+    elVodCtlSeekTrack.addEventListener("pointermove", onSeekTrackPointerMove);
+    elVodCtlSeekTrack.addEventListener("pointerup", onSeekTrackPointerUp);
+    elVodCtlSeekTrack.addEventListener("pointercancel", onSeekTrackPointerCancel);
+  }
+  if (elVodCtlPlay) elVodCtlPlay.addEventListener("click", onCtlPlay);
+  if (elVodCtlMute) elVodCtlMute.addEventListener("click", onCtlMute);
+  if (elVodCtlFullscreen) elVodCtlFullscreen.addEventListener("click", onCtlFullscreen);
+  video.addEventListener("mousemove", markVodControlsActive);
+  video.addEventListener("pointermove", markVodControlsActive);
+  video.addEventListener("touchstart", markVodControlsActive, { passive: true });
+  elVodControlsOverlay?.addEventListener("pointermove", markVodControlsActive);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  video.addEventListener("play", onPlayPauseSync);
+  video.addEventListener("pause", onPlayPauseSync);
+  onPlayPauseSync();
+  markVodControlsActive();
 
   watchdogTimer = setInterval(() => {
     if (video.paused) return;
@@ -887,18 +1314,45 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
   }, VOD_WATCHDOG_TICK_MS);
 
   vodPlaybackHelpersCleanup = () => {
+    isVodSeekDragging = false;
     video.removeEventListener("waiting", onWaiting);
     video.removeEventListener("playing", onPlaying);
     video.removeEventListener("stalled", onStalled);
     video.removeEventListener("timeupdate", onTimeUpdate);
+    video.removeEventListener("seeking", onSeeking);
+    video.removeEventListener("keydown", onKeyDown);
     video.removeEventListener("loadeddata", onLoadedData);
     video.removeEventListener("error", onError);
+    if (elVodCtlSeekTrack) {
+      elVodCtlSeekTrack.removeEventListener("click", onSeekTrackClick);
+      elVodCtlSeekTrack.removeEventListener("pointerdown", onSeekTrackPointerDown);
+      elVodCtlSeekTrack.removeEventListener("pointermove", onSeekTrackPointerMove);
+      elVodCtlSeekTrack.removeEventListener("pointerup", onSeekTrackPointerUp);
+      elVodCtlSeekTrack.removeEventListener("pointercancel", onSeekTrackPointerCancel);
+    }
+    if (elVodCtlPlay) elVodCtlPlay.removeEventListener("click", onCtlPlay);
+    if (elVodCtlMute) elVodCtlMute.removeEventListener("click", onCtlMute);
+    if (elVodCtlFullscreen) elVodCtlFullscreen.removeEventListener("click", onCtlFullscreen);
+    video.removeEventListener("mousemove", markVodControlsActive);
+    video.removeEventListener("pointermove", markVodControlsActive);
+    video.removeEventListener("touchstart", markVodControlsActive);
+    elVodControlsOverlay?.removeEventListener("pointermove", markVodControlsActive);
+    document.removeEventListener("fullscreenchange", onFullscreenChange);
+    video.removeEventListener("play", onPlayPauseSync);
+    video.removeEventListener("pause", onPlayPauseSync);
+    if (overlayIdleTimer != null) {
+      window.clearTimeout(overlayIdleTimer);
+      overlayIdleTimer = null;
+    }
+    elVodControlsOverlay?.classList.remove("vod-controls-overlay--idle");
     cancelStallRetry();
     if (watchdogTimer != null) {
       clearInterval(watchdogTimer);
       watchdogTimer = null;
     }
   };
+  syncVodControlVisibility(video);
+  updateVodProgressUi(video);
 }
 let activeStreamId: number | null = null;
 
@@ -1252,6 +1706,7 @@ function teardownVodMedia(): void {
   vodLastRemountTs = 0;
   lastVodProxiedUrl = null;
   lastVodUpstreamAuth = undefined;
+  resetVodTranscodeState();
   if (hlsVod) {
     hlsVod.destroy();
     hlsVod = null;
@@ -1267,6 +1722,12 @@ function teardownVodMedia(): void {
   elVideoVod.src = "";
   elVideoVod.removeAttribute("title");
   elVideoVod.load();
+  elVideoVod.controls = true;
+  isVodTranscode = false;
+  if (elVodControlsOverlay) {
+    elVodControlsOverlay.classList.add("hidden");
+    elVodControlsOverlay.setAttribute("aria-hidden", "true");
+  }
   elVodPlayerContainer?.classList.remove("player-container--live-tv");
 }
 
@@ -1425,7 +1886,10 @@ function playVodUrl(url: string, label: string, upstreamAuth?: Record<string, st
   attachNodecastStatusPollingForPlayback();
   elVideoVod.preload = "metadata";
   elVideoVod.crossOrigin = "anonymous";
+  elVideoVod.controls = true;
   const proxied = proxiedUrl(url);
+  applyVodTranscodeSessionMeta(getNodecastTranscodeSessionMeta(url));
+  syncVodControlVisibility(elVideoVod);
   lastVodProxiedUrl = proxied;
   lastVodUpstreamAuth = upstreamAuth;
   vodRemountAttempts = 0;
@@ -4825,6 +5289,7 @@ async function playStreamByMode(s: LiveStream): Promise<void> {
         return;
       }
       s.direct_source = resolved;
+      applyVodTranscodeSessionMeta(getNodecastTranscodeSessionMeta(resolved));
       playVodUrl(resolved, displayChannelName(s.name), state.nodecastAuthHeaders);
       syncSeriesEpisodePlaybackHighlight();
       window.scrollTo({ top: 0, behavior: "smooth" });

@@ -86,6 +86,46 @@ const MAX_PARALLEL_TRANSCODE_SESSION_POSTS = 1;
 let activeTranscodeSessionPosts = 0;
 const transcodeSessionPostWaiters: Array<() => void> = [];
 
+export type NodecastProbeResult = {
+  video?: string;
+  audio?: string;
+  audioChannels?: number;
+  durationSeconds?: number;
+  seekable?: boolean;
+  needsTranscode?: boolean;
+  compatible?: boolean;
+  container?: string;
+};
+
+export type NodecastTranscodeSessionMeta = {
+  sessionId: string;
+  playlistUrl: string;
+  startAt: number;
+  seekOffset: number;
+  durationSeconds: number | null;
+  seekable: boolean;
+  mode: string;
+  sourceUrl: string;
+  videoMode?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+  probe?: NodecastProbeResult;
+};
+
+export type NodecastTranscodeOptions = {
+  startAt?: number;
+  seekOffset?: number;
+  mode?: "vod";
+  probe?: NodecastProbeResult;
+  videoMode?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+};
+
+const probeByUpstreamUrl = new Map<string, NodecastProbeResult>();
+const transcodeMetaByPlaylistUrl = new Map<string, NodecastTranscodeSessionMeta>();
 
 async function withTranscodeSessionPostSlot<T>(run: () => Promise<T>): Promise<T> {
   if (activeTranscodeSessionPosts >= MAX_PARALLEL_TRANSCODE_SESSION_POSTS) {
@@ -462,6 +502,103 @@ async function nodecastProbeUrl(
   return `${b}/api/probe?url=${encodeURIComponent(upstreamUrl)}&ua=${encodeURIComponent(ua)}`;
 }
 
+function parseProbeResult(payload: unknown): NodecastProbeResult | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const o = payload as Record<string, unknown>;
+  const out: NodecastProbeResult = {};
+  if (typeof o.video === "string" && o.video.trim()) out.video = o.video.trim().toLowerCase();
+  if (typeof o.audio === "string" && o.audio.trim()) out.audio = o.audio.trim().toLowerCase();
+  if (typeof o.audioChannels === "number" && Number.isFinite(o.audioChannels)) {
+    out.audioChannels = o.audioChannels;
+  } else if (typeof o.audioChannels === "string" && o.audioChannels.trim()) {
+    const n = Number(o.audioChannels);
+    if (Number.isFinite(n)) out.audioChannels = n;
+  }
+  if (typeof o.durationSeconds === "number" && Number.isFinite(o.durationSeconds)) {
+    out.durationSeconds = o.durationSeconds;
+  } else if (typeof o.durationSeconds === "string" && o.durationSeconds.trim()) {
+    const n = Number(o.durationSeconds);
+    if (Number.isFinite(n)) out.durationSeconds = n;
+  }
+  if (typeof o.seekable === "boolean") out.seekable = o.seekable;
+  if (typeof o.needsTranscode === "boolean") out.needsTranscode = o.needsTranscode;
+  if (typeof o.compatible === "boolean") out.compatible = o.compatible;
+  if (typeof o.container === "string" && o.container.trim()) out.container = o.container.trim();
+  return Object.keys(out).length ? out : null;
+}
+
+function numberOrZero(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
+  if (typeof v === "string" && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return Math.max(0, n);
+  }
+  return 0;
+}
+
+function numberOrNull(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function boolOrDefault(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
+function deriveVodTranscodeProfile(opts: NodecastTranscodeOptions): {
+  videoMode?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+} {
+  const p = opts.probe;
+  const videoCodec = opts.videoCodec ?? p?.video;
+  const audioCodec = opts.audioCodec ?? p?.audio;
+  const audioChannels = opts.audioChannels ?? p?.audioChannels;
+  const videoMode = opts.videoMode ?? (videoCodec === "h264" ? "copy" : undefined);
+  return { videoMode, videoCodec, audioCodec, audioChannels };
+}
+
+function parseTranscodeSessionMeta(
+  payload: unknown,
+  nodecastBase: string,
+  sourceUrl: string,
+  opts: NodecastTranscodeOptions
+): NodecastTranscodeSessionMeta | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const o = payload as Record<string, unknown>;
+  const playlistUrl = playlistUrlFromNodecastTranscodeResponse(payload, nodecastBase);
+  if (!playlistUrl) return null;
+  const sessionIdRaw = o.sessionId;
+  const sessionId = typeof sessionIdRaw === "string" ? sessionIdRaw.trim() : "";
+  if (!sessionId) return null;
+  const profile = deriveVodTranscodeProfile(opts);
+  const startAt = numberOrZero(o.startAt ?? opts.startAt ?? 0);
+  const seekOffset = numberOrZero(o.seekOffset ?? opts.seekOffset ?? startAt);
+  const mode =
+    typeof o.mode === "string" && o.mode.trim() ? o.mode.trim().toLowerCase() : (opts.mode ?? "unknown");
+  const seekableFallback = mode === "vod";
+  return {
+    sessionId,
+    playlistUrl,
+    startAt,
+    seekOffset,
+    durationSeconds: numberOrNull(o.durationSeconds),
+    seekable: boolOrDefault(o.seekable, seekableFallback),
+    mode,
+    sourceUrl,
+    videoMode: profile.videoMode,
+    videoCodec: profile.videoCodec,
+    audioCodec: profile.audioCodec,
+    audioChannels: profile.audioChannels,
+    probe: opts.probe,
+  };
+}
+
 function playlistUrlFromNodecastTranscodeResponse(
   payload: unknown,
   nodecastBase: string
@@ -482,30 +619,47 @@ function playlistUrlFromNodecastTranscodeResponse(
 async function createNodecastTranscodeUrl(
   nodecastBase: string,
   upstreamUrlRaw: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  options: NodecastTranscodeOptions = {}
 ): Promise<string | null> {
   const upstreamUrl = innermostHttpStreamTarget(upstreamUrlRaw);
+  const startAt = Math.max(0, options.startAt ?? options.seekOffset ?? 0);
+  const seekOffset = Math.max(0, options.seekOffset ?? startAt);
+  const shouldBypassUrlOnlyCache =
+    options.mode === "vod" && (startAt > 0 || seekOffset > 0);
   if (isTranscodeFailureCoolingDown(upstreamUrl)) {
     return null;
   }
-  const now = Date.now();
-  const cached = transcodePlaylistCache.get(upstreamUrl);
-  if (cached && cached.expires > now) {
-    return cached.playlistUrl;
+  if (!shouldBypassUrlOnlyCache) {
+    const now = Date.now();
+    const cached = transcodePlaylistCache.get(upstreamUrl);
+    if (cached && cached.expires > now) {
+      return cached.playlistUrl;
+    }
   }
 
-  let inflight = transcodeInflight.get(upstreamUrl);
-  if (inflight) {
-    return inflight;
+  let inflight: Promise<string | null> | undefined;
+  if (!shouldBypassUrlOnlyCache) {
+    inflight = transcodeInflight.get(upstreamUrl);
+    if (inflight) {
+      return inflight;
+    }
   }
 
   inflight = (async (): Promise<string | null> => {
+    let probeResult: NodecastProbeResult | undefined =
+      options.probe ?? probeByUpstreamUrl.get(upstreamUrl);
     try {
       const probe = await nodecastProbeUrl(nodecastBase, upstreamUrl, headers);
-      await fetchProxiedJsonWithInit<unknown>(probe, {
+      const probePayload = await fetchProxiedJsonWithInit<unknown>(probe, {
         headers,
         timeoutMs: TRANSCODE_PROBE_WARM_FETCH_MS,
       });
+      const parsedProbe = parseProbeResult(probePayload);
+      if (parsedProbe) {
+        probeResult = parsedProbe;
+        probeByUpstreamUrl.set(upstreamUrl, parsedProbe);
+      }
     } catch {
       // optional warm-up
     }
@@ -514,7 +668,26 @@ async function createNodecastTranscodeUrl(
       "Content-Type": "application/json",
       ...(headers ?? {}),
     };
-    const postBody = JSON.stringify({ url: upstreamUrl });
+    const normalizedOptions: NodecastTranscodeOptions = {
+      ...options,
+      probe: probeResult,
+      startAt,
+      seekOffset,
+    };
+    const profile = deriveVodTranscodeProfile(normalizedOptions);
+    const postBody =
+      normalizedOptions.mode === "vod"
+        ? JSON.stringify({
+            url: upstreamUrl,
+            mode: "vod",
+            startAt,
+            seekOffset,
+            videoMode: profile.videoMode,
+            videoCodec: profile.videoCodec,
+            audioCodec: profile.audioCodec,
+            audioChannels: profile.audioChannels,
+          })
+        : JSON.stringify({ url: upstreamUrl });
     const sessionUrl = `${nodecastBase}/api/transcode/session`;
 
     const attemptDelaysMs = [0, 4_000, 10_000];
@@ -531,22 +704,27 @@ async function createNodecastTranscodeUrl(
             timeoutMs: TRANSCODE_SESSION_FETCH_MS,
           })
         );
-        const fromPlaylist = playlistUrlFromNodecastTranscodeResponse(payload, nodecastBase);
-        if (fromPlaylist) {
-          transcodePlaylistCache.set(upstreamUrl, {
-            expires: Date.now() + TRANSCODE_CACHE_MS,
-            playlistUrl: fromPlaylist,
-          });
-          return fromPlaylist;
+        const meta = parseTranscodeSessionMeta(payload, nodecastBase, upstreamUrl, normalizedOptions);
+        if (meta) {
+          if (!shouldBypassUrlOnlyCache) {
+            transcodePlaylistCache.set(upstreamUrl, {
+              expires: Date.now() + TRANSCODE_CACHE_MS,
+              playlistUrl: meta.playlistUrl,
+            });
+          }
+          transcodeMetaByPlaylistUrl.set(meta.playlistUrl, meta);
+          return meta.playlistUrl;
         }
         const resolved = extractStreamUrlDeep(payload);
         if (resolved) {
           const u = new URL(resolved, nodecastBase);
           if (u.origin === new URL(nodecastBase).origin) {
-            transcodePlaylistCache.set(upstreamUrl, {
-              expires: Date.now() + TRANSCODE_CACHE_MS,
-              playlistUrl: u.href,
-            });
+            if (!shouldBypassUrlOnlyCache) {
+              transcodePlaylistCache.set(upstreamUrl, {
+                expires: Date.now() + TRANSCODE_CACHE_MS,
+                playlistUrl: u.href,
+              });
+            }
             return u.href;
           }
         }
@@ -568,12 +746,103 @@ async function createNodecastTranscodeUrl(
     }
     setTranscodeFailureCooldown(upstreamUrl, 45_000);
     return null;
-  })().finally(() => {
-    transcodeInflight.delete(upstreamUrl);
-  });
+  })();
 
-  transcodeInflight.set(upstreamUrl, inflight);
+  if (!shouldBypassUrlOnlyCache) {
+    transcodeInflight.set(
+      upstreamUrl,
+      inflight.finally(() => {
+        transcodeInflight.delete(upstreamUrl);
+      })
+    );
+  }
   return inflight;
+}
+
+export function getNodecastTranscodeSessionMeta(
+  playlistUrl: string
+): NodecastTranscodeSessionMeta | null {
+  return transcodeMetaByPlaylistUrl.get(playlistUrl) ?? null;
+}
+
+export async function createNodecastVodTranscodeSession(
+  nodecastBase: string,
+  sourceUrl: string,
+  headers?: Record<string, string>,
+  options: NodecastTranscodeOptions = {}
+): Promise<NodecastTranscodeSessionMeta | null> {
+  return postNodecastVodTranscodeSession(nodecastBase, sourceUrl, headers, options);
+}
+
+async function postNodecastVodTranscodeSession(
+  nodecastBase: string,
+  sourceUrl: string,
+  headers?: Record<string, string>,
+  options: NodecastTranscodeOptions = {}
+): Promise<NodecastTranscodeSessionMeta | null> {
+  const upstreamUrl = innermostHttpStreamTarget(sourceUrl);
+  if (isTranscodeFailureCoolingDown(upstreamUrl)) {
+    return null;
+  }
+  const startAt = Math.max(0, options.startAt ?? options.seekOffset ?? 0);
+  const seekOffset = Math.max(0, options.seekOffset ?? startAt);
+  let probeResult: NodecastProbeResult | undefined =
+    options.probe ?? probeByUpstreamUrl.get(upstreamUrl);
+  try {
+    const probe = await nodecastProbeUrl(nodecastBase, upstreamUrl, headers);
+    const probePayload = await fetchProxiedJsonWithInit<unknown>(probe, {
+      headers,
+      timeoutMs: TRANSCODE_PROBE_WARM_FETCH_MS,
+    });
+    const parsedProbe = parseProbeResult(probePayload);
+    if (parsedProbe) {
+      probeResult = parsedProbe;
+      probeByUpstreamUrl.set(upstreamUrl, parsedProbe);
+    }
+  } catch {
+    // optional warm-up
+  }
+  const normalizedOptions: NodecastTranscodeOptions = {
+    ...options,
+    mode: "vod",
+    probe: probeResult,
+    startAt,
+    seekOffset,
+  };
+  const profile = deriveVodTranscodeProfile(normalizedOptions);
+  const postBody = JSON.stringify({
+    url: upstreamUrl,
+    mode: "vod",
+    startAt,
+    seekOffset,
+    videoMode: profile.videoMode,
+    videoCodec: profile.videoCodec,
+    audioCodec: profile.audioCodec,
+    audioChannels: profile.audioChannels,
+  });
+  const sessionUrl = `${nodecastBase}/api/transcode/session`;
+  const payload = await withTranscodeSessionPostSlot(async () =>
+    fetchProxiedJsonWithInit<unknown>(sessionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(headers ?? {}),
+      },
+      body: postBody,
+      timeoutMs: TRANSCODE_SESSION_FETCH_MS,
+    })
+  ).catch((e) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isRateLimitLikeErrorMessage(msg)) {
+      setTranscodeFailureCooldown(upstreamUrl);
+    }
+    return null;
+  });
+  if (!payload) return null;
+  const meta = parseTranscodeSessionMeta(payload, nodecastBase, upstreamUrl, normalizedOptions);
+  if (!meta) return null;
+  transcodeMetaByPlaylistUrl.set(meta.playlistUrl, meta);
+  return meta;
 }
 
 function buildNodecastProxyStreamPlaylistUrl(nodecastBase: string, upstreamUrl: string): string {
@@ -663,13 +932,17 @@ async function resolveCandidateToPlayableUrl(
             const nodecastOrigin = `${candidateUrl.protocol}//${candidateUrl.host}`;
             const viaProxyInner = buildNodecastProxyStreamPlaylistUrl(nodecastOrigin, extractedUrl.href);
             if (hrefLooksLikeProgressiveContainer(extractedUrl.href)) {
-              const t = await createNodecastTranscodeUrl(nodecastOrigin, extractedUrl.href, headers);
+              const t = await createNodecastTranscodeUrl(nodecastOrigin, extractedUrl.href, headers, {
+                mode: "vod",
+              });
               if (t) return t;
               return await resolveCandidateToPlayableUrl(viaProxyInner, headers);
             }
             const playable = await resolveCandidateToPlayableUrl(viaProxyInner, headers);
             if (playable) return playable;
-            return await createNodecastTranscodeUrl(nodecastOrigin, extractedUrl.href, headers);
+            return await createNodecastTranscodeUrl(nodecastOrigin, extractedUrl.href, headers, {
+              mode: "vod",
+            });
           }
           if (/\/api\/proxy\/stream$/i.test(extractedUrl.pathname)) {
             return buildNodecastProxyStreamPlaylistUrl(
@@ -1375,13 +1648,15 @@ async function resolvePlaybackHrefViaNodecast(
     // Try direct proxy first: avoids unnecessary transcode startup and reduces churn.
     const viaProxyPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);
     if (viaProxyPlayable && hrefLooksLikeHlsPlaylist(viaProxyPlayable)) return viaProxyPlayable;
-    const transcodedFirst = await createNodecastTranscodeUrl(b, extracted.href, headers);
+    const transcodedFirst = await createNodecastTranscodeUrl(b, extracted.href, headers, {
+      mode: "vod",
+    });
     if (transcodedFirst) return transcodedFirst;
     return null;
   }
   const proxiedPlayable = await resolveCandidateToPlayableUrl(viaProxy, headers);
   if (proxiedPlayable) return proxiedPlayable;
-  return createNodecastTranscodeUrl(b, extracted.href, headers);
+  return createNodecastTranscodeUrl(b, extracted.href, headers, { mode: "vod" });
 }
 
 async function tryResolveVodFromGetInfo(
@@ -1541,7 +1816,9 @@ export async function resolveNodecastVodStreamUrl(
     if (!playable) continue;
     if (hrefLooksLikeHlsPlaylist(playable)) return playable;
     if (hrefLooksLikeProgressiveContainer(playable)) {
-      const transcoded = await createNodecastTranscodeUrl(b, playable, authHeaders);
+      const transcoded = await createNodecastTranscodeUrl(b, playable, authHeaders, {
+        mode: "vod",
+      });
       if (transcoded && hrefLooksLikeHlsPlaylist(transcoded)) return transcoded;
       continue;
     }

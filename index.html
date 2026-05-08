@@ -287,6 +287,28 @@
                 <div class="player-buffering__spinner" aria-hidden="true"></div>
                 <span class="player-buffering__label">Chargement…</span>
               </div>
+              <div id="vod-controls-overlay" class="vod-controls-overlay hidden" aria-hidden="true">
+                <div class="vod-controls-row">
+                  <button id="vod-ctl-play" type="button" class="vod-ctl-btn" aria-label="Play"></button>
+                  <button id="vod-ctl-mute" type="button" class="vod-ctl-btn" aria-label="Mute"></button>
+                  <span id="vod-ctl-current" class="vod-ctl-time">00:00:00</span>
+                  <div
+                    id="vod-ctl-seek-track"
+                    class="vod-ctl-seek-track"
+                    role="slider"
+                    aria-label="Seek"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow="0"
+                    tabindex="0"
+                  >
+                    <div id="vod-ctl-seek-fill" class="vod-ctl-seek-fill"></div>
+                    <div id="vod-ctl-seek-handle" class="vod-ctl-seek-handle"></div>
+                  </div>
+                  <span id="vod-ctl-duration" class="vod-ctl-time">00:00:00</span>
+                  <button id="vod-ctl-fullscreen" type="button" class="vod-ctl-btn" aria-label="Fullscreen"></button>
+                </div>
+              </div>
             </div>
           </div>
 

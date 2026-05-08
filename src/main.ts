@@ -108,10 +108,39 @@ const elVideo = $("#video") as HTMLVideoElement;
 const elVideoVod = document.getElementById("video-vod") as HTMLVideoElement | null;
 elVideo.preload = "auto";
 elVideo.crossOrigin = "anonymous";
+const VOD_VOLUME_LS_KEY = "velora_vod_volume_v1";
+
+function readPersistedVodVolume(): number {
+  try {
+    const raw = window.localStorage.getItem(VOD_VOLUME_LS_KEY);
+    if (raw == null) return 1;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 1;
+    return Math.min(1, Math.max(0, n));
+  } catch {
+    return 1;
+  }
+}
+
+function persistVodVolume(volume: number): void {
+  if (!Number.isFinite(volume)) return;
+  try {
+    window.localStorage.setItem(VOD_VOLUME_LS_KEY, String(volume));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Films / épisodes VOD : son activé par défaut après un clic utilisateur ; repli silencieux si autoplay bloque. */
+function prepareVodAudioForPlayback(video: HTMLVideoElement): void {
+  video.volume = readPersistedVodVolume();
+  video.muted = false;
+}
+
 if (elVideoVod) {
   elVideoVod.preload = "none";
   elVideoVod.crossOrigin = "anonymous";
-  elVideoVod.muted = true;
+  elVideoVod.muted = false;
   elVideoVod.autoplay = false;
 }
 const elVodPlayerContainer = document.getElementById("vod-player-container") as HTMLElement | null;
@@ -217,6 +246,8 @@ const elPackagesView = $("#packages-view") as HTMLDivElement;
 const elContentView = $("#content-view") as HTMLElement;
 const elDynamicList = $("#dynamic-list") as HTMLDivElement;
 const elBtnBackHome = $("#btn-back-home") as HTMLButtonElement;
+const elBtnGoHome = $("#btn-go-home") as HTMLButtonElement | null;
+const elBtnLogoHome = $("#btn-logo-home") as HTMLButtonElement | null;
 const elTabLive = $("#tab-live") as HTMLButtonElement;
 const elTabMovies = $("#tab-movies") as HTMLButtonElement;
 const elTabSeries = $("#tab-series") as HTMLButtonElement;
@@ -593,6 +624,7 @@ let isVodTranscodeSeeking = false;
 let suppressNativeSeekingHandler = false;
 let isVodSeekDragging = false;
 let lastVodUiLogSecond = -1;
+let pendingVodSeekTargetSeconds: number | null = null;
 
 function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): void {
   void status;
@@ -657,6 +689,7 @@ function resetVodTranscodeState(): void {
   currentVodAudioChannels = undefined;
   isVodTranscode = false;
   vodSeekInFlight = false;
+  pendingVodSeekTargetSeconds = null;
   setVodSeekVisualPercent(0);
 }
 
@@ -693,22 +726,24 @@ function getRealVodDuration(video: HTMLVideoElement): number {
 
 function updateVodProgressUi(video: HTMLVideoElement): void {
   const realDuration = getRealVodDuration(video);
-  const realCurrent = getRealVodCurrentTime(video);
   if (!(realDuration > 0)) return;
+  const baseCurrent = getRealVodCurrentTime(video);
+  const displayCurrent =
+    pendingVodSeekTargetSeconds != null ? pendingVodSeekTargetSeconds : baseCurrent;
   if (isVodTranscode && elVodCtlCurrent && elVodCtlDuration) {
-    elVodCtlCurrent.textContent = formatDurationHms(realCurrent);
+    elVodCtlCurrent.textContent = formatDurationHms(displayCurrent);
     elVodCtlDuration.textContent = formatDurationHms(realDuration);
     if (!isVodSeekDragging) {
-      const pct = Math.min(1, Math.max(0, realCurrent / realDuration));
+      const pct = Math.min(1, Math.max(0, displayCurrent / realDuration));
       setVodSeekVisualPercent(pct);
     }
   }
-  const nowSecond = Math.floor(realCurrent);
+  const nowSecond = Math.floor(displayCurrent);
   if (nowSecond !== lastVodUiLogSecond) {
     lastVodUiLogSecond = nowSecond;
     console.log("[VOD UI] currentVodStartAt", currentVodStartAt);
     console.log("[VOD UI] video.currentTime", Number.isFinite(video.currentTime) ? video.currentTime : 0);
-    console.log("[VOD UI] realCurrentTime", realCurrent);
+    console.log("[VOD UI] realCurrentTime", displayCurrent);
     console.log("[VOD UI] duration", currentVodDurationSeconds);
   }
 }
@@ -736,13 +771,16 @@ function teardownVodPlaybackHelpers(): void {
   }
 }
 
-/** Start playback as soon as the source is attached; use muted only if the browser blocks unmuted play. */
+/** Start playback with sound after user gesture ; muted fallback only if autoplay refuses unmuted playback. */
 function playVodAggressive(video: HTMLVideoElement): void {
+  prepareVodAudioForPlayback(video);
   void video.play().catch(() => {
     const prevMuted = video.muted;
+    const prevVol = video.volume;
     video.muted = true;
     void video.play().catch(() => {
       video.muted = prevMuted;
+      video.volume = prevVol;
     });
   });
 }
@@ -935,7 +973,7 @@ function tryRemountVodHls(video: HTMLVideoElement): boolean {
   return true;
 }
 
-async function seekVodTranscodeTo(video: HTMLVideoElement, targetSeconds: number): Promise<void> {
+async function seekVodTranscodeTo(video: HTMLVideoElement, targetSeconds: number): Promise<boolean> {
   const logVodSeekGuard = (reason: string): void => {
     console.log("[VOD SEEK GUARD]", {
       reason,
@@ -949,23 +987,23 @@ async function seekVodTranscodeTo(video: HTMLVideoElement, targetSeconds: number
   };
   if (!state) {
     logVodSeekGuard("missing state");
-    return;
+    return false;
   }
   if (!isVodNodecastTranscodeSession()) {
     logVodSeekGuard("not transcode session");
-    return;
+    return false;
   }
   if (!currentVodSourceUrl) {
     logVodSeekGuard("missing currentVodSourceUrl");
-    return;
+    return false;
   }
   if (vodSeekInFlight || isVodTranscodeSeeking) {
     logVodSeekGuard("seek already in flight");
-    return;
+    return false;
   }
   if (!currentVodDurationSeconds || !Number.isFinite(currentVodDurationSeconds)) {
     logVodSeekGuard("missing currentVodDurationSeconds");
-    return;
+    return false;
   }
   const maxTarget = Math.max(0, currentVodDurationSeconds - 2);
   const clamped = Math.max(0, Math.min(targetSeconds, maxTarget));
@@ -974,83 +1012,89 @@ async function seekVodTranscodeTo(video: HTMLVideoElement, targetSeconds: number
   vodSeekInFlight = true;
   isVodTranscodeSeeking = true;
   try {
-    const oldSessionId = currentTranscodeSessionId;
-    console.log("[VOD SEEK] oldSessionId", oldSessionId);
-    suppressNativeSeekingHandler = true;
     try {
-      video.pause();
-    } catch {
-      /* ignore */
-    }
-    startVodFakeLoadingOverlay(`Preparing from ${formatDurationHms(clamped)}...`);
-    if (hlsVod) {
+      const oldSessionId = currentTranscodeSessionId;
+      console.log("[VOD SEEK] oldSessionId", oldSessionId);
+      suppressNativeSeekingHandler = true;
       try {
-        hlsVod.stopLoad();
+        video.pause();
       } catch {
         /* ignore */
       }
-      try {
-        hlsVod.detachMedia();
-      } catch {
-        /* ignore */
+      startVodFakeLoadingOverlay(`Preparing from ${formatDurationHms(clamped)}...`);
+      if (hlsVod) {
+        try {
+          hlsVod.stopLoad();
+        } catch {
+          /* ignore */
+        }
+        try {
+          hlsVod.detachMedia();
+        } catch {
+          /* ignore */
+        }
+        try {
+          hlsVod.destroy();
+        } catch {
+          /* ignore */
+        }
+        hlsVod = null;
       }
-      try {
-        hlsVod.destroy();
-      } catch {
-        /* ignore */
-      }
-      hlsVod = null;
-    }
-    video.removeAttribute("src");
-    video.src = "";
-    video.load();
+      video.removeAttribute("src");
+      video.src = "";
+      video.load();
 
-    const session = await createNodecastVodTranscodeSession(
-      state.base,
-      currentVodSourceUrl,
-      state.nodecastAuthHeaders,
-      {
-        mode: "vod",
-        startAt: clamped,
-        seekOffset: clamped,
-        videoMode: currentVodVideoMode,
-        videoCodec: currentVodVideoCodec,
-        audioCodec: currentVodAudioCodec,
-        audioChannels: currentVodAudioChannels,
+      const session = await createNodecastVodTranscodeSession(
+        state.base,
+        currentVodSourceUrl,
+        state.nodecastAuthHeaders,
+        {
+          mode: "vod",
+          startAt: clamped,
+          seekOffset: clamped,
+          videoMode: currentVodVideoMode,
+          videoCodec: currentVodVideoCodec,
+          audioCodec: currentVodAudioCodec,
+          audioChannels: currentVodAudioChannels,
+        }
+      );
+      if (!session || !elVideoVod) {
+        logVodSeekGuard("session creation failed");
+        return false;
       }
-    );
-    if (!session || !elVideoVod) {
-      logVodSeekGuard("session creation failed");
-      return;
-    }
-    console.log("[VOD SEEK] new sessionId", session.sessionId);
-    applyVodTranscodeSessionMeta({
-      ...session,
-      durationSeconds: session.durationSeconds ?? currentVodDurationSeconds,
-    });
-    const proxied = proxiedUrl(session.playlistUrl);
-    console.log("[VOD SEEK] new playlistUrl", session.playlistUrl);
-    lastVodProxiedUrl = proxied;
-    mountHlsVod(proxied, video, state.nodecastAuthHeaders, {
-      autoPlayOnManifest: true,
-    });
-    const clearSuppress = (): void => {
-      suppressNativeSeekingHandler = false;
-      video.removeEventListener("loadedmetadata", clearSuppress);
-      video.removeEventListener("canplay", clearSuppress);
-    };
-    video.addEventListener("loadedmetadata", clearSuppress);
-    video.addEventListener("canplay", clearSuppress);
-    syncVodControlVisibility(video);
-    attachVodPlaybackHelpers(video);
-    updateVodProgressUi(video);
-    void video.play().catch(() => {});
-    if (oldSessionId && oldSessionId !== currentTranscodeSessionId) {
-      const delUrl = `${state.base.replace(/\/+$/, "")}/api/transcode/${encodeURIComponent(oldSessionId)}`;
-      void fetch(proxiedUrl(delUrl), {
-        method: "DELETE",
-        headers: state.nodecastAuthHeaders,
-      }).catch(() => {});
+      console.log("[VOD SEEK] new sessionId", session.sessionId);
+      applyVodTranscodeSessionMeta({
+        ...session,
+        durationSeconds: session.durationSeconds ?? currentVodDurationSeconds,
+      });
+      const proxied = proxiedUrl(session.playlistUrl);
+      console.log("[VOD SEEK] new playlistUrl", session.playlistUrl);
+      lastVodProxiedUrl = proxied;
+      prepareVodAudioForPlayback(video);
+      mountHlsVod(proxied, video, state.nodecastAuthHeaders, {
+        autoPlayOnManifest: true,
+      });
+      const clearSuppress = (): void => {
+        suppressNativeSeekingHandler = false;
+        video.removeEventListener("loadedmetadata", clearSuppress);
+        video.removeEventListener("canplay", clearSuppress);
+      };
+      video.addEventListener("loadedmetadata", clearSuppress);
+      video.addEventListener("canplay", clearSuppress);
+      syncVodControlVisibility(video);
+      attachVodPlaybackHelpers(video);
+      updateVodProgressUi(video);
+      if (oldSessionId && oldSessionId !== currentTranscodeSessionId) {
+        const delUrl = `${state.base.replace(/\/+$/, "")}/api/transcode/${encodeURIComponent(oldSessionId)}`;
+        void fetch(proxiedUrl(delUrl), {
+          method: "DELETE",
+          headers: state.nodecastAuthHeaders,
+        }).catch(() => {});
+      }
+      return true;
+    } catch (err) {
+      console.error("[VOD SEEK] error", err);
+      return false;
     }
   } finally {
     vodSeekInFlight = false;
@@ -1133,6 +1177,8 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
   const onError = (): void => {
     setVodPlayerBufferingVisible(false);
     cancelStallRetry();
+    pendingVodSeekTargetSeconds = null;
+    updateVodProgressUi(video);
   };
 
   const onPlaying = (): void => {
@@ -1141,6 +1187,8 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     lastProgressTs = Date.now();
     lastTime = getRealVodCurrentTime(video);
     forceStartLoad();
+    pendingVodSeekTargetSeconds = null;
+    updateVodProgressUi(video);
   };
 
   const onTimeUpdate = (): void => {
@@ -1192,7 +1240,9 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     const targetSeconds = percent * currentVodDurationSeconds;
     console.log("[VOD CTRL] pointer percent", percent);
     console.log("[VOD CTRL] targetSeconds", targetSeconds);
+    pendingVodSeekTargetSeconds = targetSeconds;
     setVodSeekVisualPercent(percent);
+    updateVodProgressUi(video);
     void seekVodTranscodeTo(video, targetSeconds);
   };
   const updateDragPercent = (event: PointerEvent): void => {
@@ -1257,7 +1307,13 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     else void document.exitFullscreen?.().catch(() => {});
   };
   const onFullscreenChange = (): void => {
-    const inFullscreen = Boolean(document.fullscreenElement);
+    const inFullscreen = Boolean(
+      document.fullscreenElement &&
+        elVodPlayerContainer &&
+        document.fullscreenElement === elVodPlayerContainer
+    );
+    elVodPlayerContainer?.classList.toggle("player-container--fullscreen", inFullscreen);
+    document.body.classList.toggle("vel-vod-fullscreen-active", inFullscreen);
     setVodControlIcon(
       elVodCtlFullscreen,
       inFullscreen ? VOD_CONTROL_ICONS.fullscreenExit : VOD_CONTROL_ICONS.fullscreen,
@@ -1303,6 +1359,15 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
   video.addEventListener("touchstart", markVodControlsActive, { passive: true });
   elVodControlsOverlay?.addEventListener("pointermove", markVodControlsActive);
   document.addEventListener("fullscreenchange", onFullscreenChange);
+  const onVolumeChange = (): void => {
+    persistVodVolume(video.volume);
+    setVodControlIcon(
+      elVodCtlMute,
+      video.muted ? VOD_CONTROL_ICONS.muted : VOD_CONTROL_ICONS.volume,
+      video.muted ? "Unmute" : "Mute"
+    );
+  };
+  video.addEventListener("volumechange", onVolumeChange);
   video.addEventListener("play", onPlayPauseSync);
   video.addEventListener("pause", onPlayPauseSync);
   onPlayPauseSync();
@@ -1338,6 +1403,7 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     video.removeEventListener("touchstart", markVodControlsActive);
     elVodControlsOverlay?.removeEventListener("pointermove", markVodControlsActive);
     document.removeEventListener("fullscreenchange", onFullscreenChange);
+    video.removeEventListener("volumechange", onVolumeChange);
     video.removeEventListener("play", onPlayPauseSync);
     video.removeEventListener("pause", onPlayPauseSync);
     if (overlayIdleTimer != null) {
@@ -2315,12 +2381,13 @@ function closeAddChannelsToPackageDialog(): void {
 
 function syncCatalogBackButtonLabel(): void {
   const lab = elBtnBackHome.querySelector(".back-btn__text");
-  if (!lab) return;
   const inDetail =
     uiShell === "content" &&
     ((uiTab === "movies" && vodMovieUiPhase === "detail") ||
       (uiTab === "series" && seriesUiPhase === "detail"));
-  lab.textContent = inDetail ? "Liste" : "Accueil";
+  if (lab) lab.textContent = "Liste";
+  elBtnBackHome.classList.toggle("hidden", !inDetail);
+  elBtnGoHome?.classList.remove("hidden");
 }
 
 function catalogPosterRowLooksPlaying(s: LiveStream): boolean {
@@ -2342,9 +2409,162 @@ function vodStreamsRowRatingLabel(s: LiveStream): string | null {
   return null;
 }
 
+function normalizeListingHeadingSource(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Bouquets télé : mise en forme lisible sans sur-normaliser les marques réelles (CANAL+, beIN Sports…). */
+function prettifyLiveChannelLabel(displayName: string): string {
+  const t = displayName.replace(/\|/g, " · ").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const flat = normalizeListingHeadingSource(t).replace(/\s+/g, "");
+  const nk = normalizeListingHeadingSource(t);
+  if (flat.includes("bein") && flat.includes("sport")) return "beIN Sports";
+  if (flat.includes("rmcsport")) return "RMC Sport";
+  if (/^rmc /.test(nk) && /\bsport\b/.test(nk)) return "RMC Sport";
+  if (/canal\s*\+\s*|canal\s*±\s*|canalplus/i.test(displayName.trim())) return "CANAL+";
+  if (nk === "france") return "Chaînes France";
+  if (nk === "sport" || nk === "sports") return "Chaînes sport";
+  return displayName.trim().replace(/\s+/g, " ");
+}
+
+function velCategoryHeadingTheme(normPackage: string, normEffective: string): string {
+  const blob = `${normPackage} ${normEffective}`;
+  if (
+    /\b(sport|rugby|foot|liga|match|motogp|nba|ufc|golf|tennis)\b/.test(blob) ||
+    /bein|rmc\s*sport|dazn|eurosport|winamax|sport\+/.test(blob)
+  ) {
+    return "vel-category-heading--sport";
+  }
+  if (/\baction\b|\bthriller\b|\bcrime\b|aventures?/.test(blob)) return "vel-category-heading--action";
+  if (/enfant|kids|junior|cartoon|animations?|anime|dessin/.test(blob)) return "vel-category-heading--kids";
+  if (/horreur|horror|terror|gore|\bslasher\b/.test(blob)) return "vel-category-heading--horror";
+  if (/comed|humour|comedy|sitcom/.test(blob)) return "vel-category-heading--comedy";
+  return "vel-category-heading--neutral";
+}
+
+function frenchMoviesCatalogTitle(normRaw: string): string | null {
+  const norm = normalizeListingHeadingSource(normRaw);
+  if (!norm) return null;
+  if (/populaire|\bpopular\b/.test(norm)) return "Films populaires";
+  if (/tendance|trending|\bbuzz\b|\btrends?\b/.test(norm)) return "Films tendances";
+  if (/\bsci[- ]fi\b|\bsci fi\b|\bscience.fiction\b/.test(norm)) return "Films science-fiction";
+  if (/\baction\b|\bactions\b/.test(norm)) return "Films d\u2019action";
+  if (/comed|\bcomedy\b|humour|\bhumor\b|\bcomedies?\b/.test(norm)) return "Films comédie";
+  if (/drame\b|\bdrama\b|dramati/.test(norm)) return "Films dramatiques";
+  if (/horreur|\bhorror\b/.test(norm)) return "Films horreur";
+  if (/\bthriller\b|\bthrillers\b/.test(norm)) return "Films thriller";
+  if (/\bcrime\b|polici/.test(norm)) return "Films crime";
+  if (/romance|romanti/.test(norm)) return "Films romance";
+  if (/animations?|\banime\b|dessin anime/.test(norm)) return "Films animation";
+  if (/documentaire|documentary/.test(norm)) return "Films documentaires";
+  if (/famil|famille|\bfamily\b|tout.public/.test(norm)) return "Films famille";
+  return null;
+}
+
+function frenchSeriesCatalogTitle(normRaw: string): string | null {
+  const norm = normalizeListingHeadingSource(normRaw);
+  if (!norm) return null;
+  if (/populaire|\bpopular\b/.test(norm)) return "Séries populaires";
+  if (/tendance|trending|\bbuzz\b|\btrends?\b/.test(norm)) return "Séries tendances";
+  if (/drame\b|\bdrama\b|dramati/.test(norm)) return "Séries dramatiques";
+  if (/comed|\bcomedy\b|sitcom|\bhumor\b|\bhumour\b/.test(norm)) return "Séries comédie";
+  if (/\bcrime\b|polici/.test(norm)) return "Séries crime";
+  if (/\bthriller\b/.test(norm)) return "Séries thriller";
+  if (/\baction\b|\bactions\b/.test(norm)) return "Séries d\u2019action";
+  return null;
+}
+
+function readableCatalogFallbackTitle(raw: string): string {
+  const t = raw.replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return prettifyLiveChannelLabel(t.replace(/_/g, " "));
+}
+
+/** Titre liste (bouquet ou pastille sélectionnée). */
+function resolveVelListingHeading(kind: "live" | "movies" | "series"): {
+  title: string;
+  headingClassSuffix: string;
+  liveAccent: boolean;
+} {
+  const pkgMeta = uiAdminPackageId ? findPackageById(uiAdminPackageId) : undefined;
+  const packageRaw = ((pkgMeta?.name ?? "").trim() || uiAdminPackageId || "").trim();
+  let focusRaw = packageRaw;
+
+  if (kind === "live" && selectedPillId !== "all") {
+    const lab = pillDefs.find((p) => p.id === selectedPillId)?.label.trim();
+    if (lab) focusRaw = lab;
+  }
+
+  const normPkg = normalizeListingHeadingSource(packageRaw);
+  const normFocus = normalizeListingHeadingSource(focusRaw || packageRaw);
+  const headingClassSuffix = velCategoryHeadingTheme(normPkg, normFocus);
+
+  if (kind === "live") {
+    const t = prettifyLiveChannelLabel(focusRaw || packageRaw || "Catalogue");
+    return { title: t || "Catalogue", headingClassSuffix, liveAccent: true };
+  }
+
+  if (kind === "movies") {
+    const guessed =
+      frenchMoviesCatalogTitle(focusRaw) ??
+      frenchMoviesCatalogTitle(packageRaw) ??
+      frenchMoviesCatalogTitle(`${focusRaw} ${packageRaw}`);
+    const fb = readableCatalogFallbackTitle(focusRaw || packageRaw);
+    return {
+      title: guessed ?? (fb ? fb : "Films"),
+      headingClassSuffix,
+      liveAccent: false,
+    };
+  }
+
+  const guessedS =
+    frenchSeriesCatalogTitle(focusRaw) ??
+    frenchSeriesCatalogTitle(packageRaw) ??
+    frenchSeriesCatalogTitle(`${focusRaw} ${packageRaw}`);
+  const fbS = readableCatalogFallbackTitle(focusRaw || packageRaw);
+  return {
+    title: guessedS ?? (fbS ? fbS : "Séries"),
+    headingClassSuffix,
+    liveAccent: false,
+  };
+}
+
+/** En-tête de section pour grilles Chaînes / Films / Séries (hors fiche détail). */
+function prependVelListingCategoryHeader(mediaKind: UiTab): void {
+  if (!uiAdminPackageId) return;
+  const key = mediaKind === "live" ? "live" : mediaKind === "movies" ? "movies" : "series";
+  const { title, headingClassSuffix, liveAccent } = resolveVelListingHeading(key);
+  if (!title) return;
+
+  const el = document.createElement("header");
+  el.className = `vel-category-heading ${headingClassSuffix}`;
+  if (liveAccent) el.classList.add("vel-category-heading--live-accent");
+
+  const h = document.createElement("h2");
+  h.className = "vel-category-heading__title";
+  h.textContent = title;
+
+  const line = document.createElement("span");
+  line.className = "vel-category-heading__accent-line";
+  line.setAttribute("aria-hidden", "true");
+
+  el.append(h, line);
+  elDynamicList.prepend(el);
+}
+
+const EPISODE_ROW_PLAY_SVG =
+  '<svg class="vel-vod-detail__episode-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 6v12l10-6z"/></svg>';
+
 function renderCatalogPosterGrid(streams: LiveStream[], tab: CatalogMediaTab): void {
   if (!state) return;
   const st = state;
+  prependVelListingCategoryHeader(tab === "movies" ? "movies" : "series");
   const emptyEmoji = tab === "movies" ? "🎬" : "📺";
   const adminTools = showAdminChannelCurateTools() && uiAdminPackageId != null;
   for (const s of streams) {
@@ -2506,16 +2726,10 @@ function preloadVodDetailHeroBackground(
   attempt(primaryUrl, gradient, Boolean(fallbackUrl));
 }
 
-/** Masque « Regarder » si ce titre est celui du lecteur et le lecteur est affiché (y compris pendant le chargement). */
-function shouldHideCatalogRegarderButton(s: LiveStream, tab: CatalogMediaTab): boolean {
+/** Masque « Regarder » (films uniquement) si ce titre joue dans le lecteur VOD ouvert. */
+function shouldHideCatalogRegarderButtonMovie(s: LiveStream): boolean {
   if (activeStreamId !== s.stream_id) return false;
-  if (tab === "movies") {
-    return Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
-  }
-  if (tab === "series") {
-    return Boolean(!elPlayerContainer.classList.contains("hidden"));
-  }
-  return false;
+  return Boolean(elVodPlayerContainer && !elVodPlayerContainer.classList.contains("hidden"));
 }
 
 function appendCatalogEpisodesSkeleton(listEl: HTMLDivElement): void {
@@ -2598,6 +2812,8 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
   let episodesListEl: HTMLDivElement | null = null;
   let seasonToolbarEl: HTMLDivElement | null = null;
   let seasonSelectEl: HTMLSelectElement | null = null;
+  /** Présent uniquement sur les fiches film (pas série). */
+  let btnWatch: HTMLButtonElement | null = null;
   if (tab === "series") {
     const episodesSection = document.createElement("section");
     episodesSection.className =
@@ -2624,29 +2840,27 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
     episodesListEl.className = "vel-vod-detail__episodes";
     appendCatalogEpisodesSkeleton(episodesListEl);
     episodesSection.append(episodesH, seasonToolbar, episodesListEl);
-    inner.append(titleEl, metaRow, castBlock, directorBlock, episodesSection, plot);
+    inner.append(titleEl, metaRow, plot, castBlock, directorBlock, episodesSection);
   } else {
-    inner.append(titleEl, metaRow, plot, castBlock, directorBlock);
+    btnWatch = document.createElement("button");
+    btnWatch.type = "button";
+    btnWatch.className = "vel-vod-detail__watch vel-vod-detail__watch--film primary";
+    btnWatch.textContent = "Regarder";
+    btnWatch.setAttribute("aria-label", `Regarder « ${streamTitle} »`);
+    btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButtonMovie(s));
+    btnWatch.addEventListener("click", () => {
+      activeStreamId = s.stream_id;
+      startVodFakeLoadingOverlay("Préparation du film…");
+      btnWatch!.classList.add("hidden");
+      void (async () => {
+        await playStreamByMode(s);
+        btnWatch!.classList.toggle("hidden", shouldHideCatalogRegarderButtonMovie(s));
+      })();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    inner.append(titleEl, btnWatch, metaRow, plot, castBlock, directorBlock);
   }
 
-  const btnWatch = document.createElement("button");
-  btnWatch.type = "button";
-  btnWatch.className = "vel-vod-detail__watch primary";
-  btnWatch.textContent = "Regarder";
-  btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
-  btnWatch.addEventListener("click", () => {
-    activeStreamId = s.stream_id;
-    startVodFakeLoadingOverlay(tab === "series" ? "Préparation de l’épisode…" : "Préparation du film…");
-    if (tab === "series") syncSeriesEpisodePlaybackHighlight();
-    btnWatch.classList.add("hidden");
-    void (async () => {
-      await playStreamByMode(s);
-      btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
-    })();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  });
-
-  inner.append(btnWatch);
   wrap.append(bg, inner);
   elDynamicList.appendChild(wrap);
 
@@ -2672,6 +2886,7 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
 
     const displayTitle = (info?.title || streamTitle).trim() || streamTitle;
     titleEl.textContent = displayTitle;
+    if (btnWatch) btnWatch.setAttribute("aria-label", `Regarder « ${displayTitle} »`);
 
     const rd = (info?.ratingDisplay ?? "").trim();
     if (rd) {
@@ -2748,7 +2963,15 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
             meta.textContent = ep.duration;
             body.appendChild(meta);
           }
-          row.append(badge, body);
+          const playWrap = document.createElement("span");
+          playWrap.className = "vel-vod-detail__episode-play-wrap";
+          playWrap.innerHTML = EPISODE_ROW_PLAY_SVG;
+          row.append(badge, playWrap, body);
+          const epTitleTrim = String(ep.title ?? "").trim();
+          row.setAttribute(
+            "aria-label",
+            `Lire épisode ${ep.seasonNumber}×${ep.episodeNum}${epTitleTrim ? ` — ${ep.title}` : ""}`
+          );
           row.dataset.episodeStreamId = String(ep.episodeStreamId);
           row.addEventListener("click", () => {
             const epStream: LiveStream = {
@@ -2829,7 +3052,7 @@ function renderCatalogMediaDetailView(s: LiveStream, tab: CatalogMediaTab): void
       }
     }
 
-    btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButton(s, tab));
+    if (btnWatch) btnWatch.classList.toggle("hidden", shouldHideCatalogRegarderButtonMovie(s));
   })();
 }
 
@@ -2882,6 +3105,8 @@ function renderPackageChannelList(): void {
   const alphaIdsForDrag =
     pkgIdForDrag != null ? liveStreamsAlphaForPackage(pkgIdForDrag).map((x) => x.stream_id) : [];
   const visibleIdSetForDrag = new Set(filtered.map((x) => x.stream_id));
+
+  prependVelListingCategoryHeader("live");
 
   for (const s of filtered) {
     const row = document.createElement("div");
@@ -5562,6 +5787,9 @@ elBtnConnect.addEventListener("click", () => void connect());
 elBtnLogout.addEventListener("click", disconnect);
 elBtnClosePlayer?.addEventListener("click", () => closePlayerUserAction());
 elBtnCloseVodPlayer?.addEventListener("click", () => closeVodPlayerUserAction());
+elBtnLogoHome?.addEventListener("click", () => {
+  showPackagesShell();
+});
 elBtnBackHome.addEventListener("click", () => {
   if (uiTab === "movies" && vodMovieUiPhase === "detail" && uiShell === "content") {
     vodMovieUiPhase = "list";
@@ -5581,6 +5809,9 @@ elBtnBackHome.addEventListener("click", () => {
     if (state && uiAdminPackageId != null) renderPackageChannelList();
     return;
   }
+  showPackagesShell();
+});
+elBtnGoHome?.addEventListener("click", () => {
   showPackagesShell();
 });
 

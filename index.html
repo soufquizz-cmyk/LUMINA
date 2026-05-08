@@ -186,11 +186,11 @@
         <div class="vel-dashboard">
           <div class="vel-sticky-top">
           <header class="vel-header">
-            <div class="vel-brand">
+            <button type="button" id="btn-logo-home" class="vel-brand vel-brand--home" aria-label="Retour à l'accueil">
               Velora<span class="vel-brand-vip"
                 ><span class="vel-brand-vip__v">V</span><span class="vel-brand-vip__i">I</span
                 ><span class="vel-brand-vip__p">P</span></span>
-            </div>
+            </button>
             <div class="vel-header__right">
               <div class="vel-header__country">
                 <select id="country-select" class="country-select" aria-label="Pays"></select>
@@ -273,7 +273,6 @@
                 controls
                 playsinline
                 preload="auto"
-                muted
                 crossorigin="anonymous"
               ></video>
               <div
@@ -321,6 +320,20 @@
                       d="M14 6L8 12l6 6"
                       stroke="currentColor"
                       stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span class="back-btn__text">Liste</span>
+              </button>
+              <button type="button" id="btn-go-home" class="back-btn back-btn--secondary" title="Retour à l'accueil">
+                <span class="back-btn__icon" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path
+                      d="M3 10.8L12 4l9 6.8V20a1 1 0 0 1-1 1h-5.5v-6.2h-5V21H4a1 1 0 0 1-1-1v-9.2z"
+                      stroke="currentColor"
+                      stroke-width="1.8"
                       stroke-linecap="round"
                       stroke-linejoin="round"
                     />

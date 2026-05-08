@@ -624,7 +624,7 @@ let isVodTranscodeSeeking = false;
 let suppressNativeSeekingHandler = false;
 let isVodSeekDragging = false;
 let lastVodUiLogSecond = -1;
-let pendingVodSeekTargetSeconds: number | null = null;
+let optimisticVodTimeSeconds: number | null = null;
 
 function startVodFakeLoadingOverlay(status = "Préparation de la lecture…"): void {
   void status;
@@ -689,7 +689,7 @@ function resetVodTranscodeState(): void {
   currentVodAudioChannels = undefined;
   isVodTranscode = false;
   vodSeekInFlight = false;
-  pendingVodSeekTargetSeconds = null;
+  optimisticVodTimeSeconds = null;
   setVodSeekVisualPercent(0);
 }
 
@@ -729,7 +729,7 @@ function updateVodProgressUi(video: HTMLVideoElement): void {
   if (!(realDuration > 0)) return;
   const baseCurrent = getRealVodCurrentTime(video);
   const displayCurrent =
-    pendingVodSeekTargetSeconds != null ? pendingVodSeekTargetSeconds : baseCurrent;
+    optimisticVodTimeSeconds != null ? optimisticVodTimeSeconds : baseCurrent;
   if (isVodTranscode && elVodCtlCurrent && elVodCtlDuration) {
     elVodCtlCurrent.textContent = formatDurationHms(displayCurrent);
     elVodCtlDuration.textContent = formatDurationHms(realDuration);
@@ -1177,7 +1177,11 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
   const onError = (): void => {
     setVodPlayerBufferingVisible(false);
     cancelStallRetry();
-    pendingVodSeekTargetSeconds = null;
+    // Note: do NOT clear optimisticVodTimeSeconds here. Clearing the source
+    // during a seek transition (video.src = "" + video.load()) can fire an
+    // `error` event mid-transition; clearing the optimistic value would let
+    // the progress bar snap back. We only clear on `playing` (success) or
+    // when seekVodTranscodeTo itself reports failure.
     updateVodProgressUi(video);
   };
 
@@ -1187,11 +1191,18 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     lastProgressTs = Date.now();
     lastTime = getRealVodCurrentTime(video);
     forceStartLoad();
-    pendingVodSeekTargetSeconds = null;
+    optimisticVodTimeSeconds = null;
     updateVodProgressUi(video);
   };
 
   const onTimeUpdate = (): void => {
+    if (optimisticVodTimeSeconds !== null) {
+      // While we have an optimistic seek target, ignore timeupdate from the
+      // (possibly old / tearing-down) media element; just keep the UI on the
+      // optimistic value until the new session reaches `playing`.
+      updateVodProgressUi(video);
+      return;
+    }
     const t = getRealVodCurrentTime(video);
     if (t > lastTime) lastTime = t;
     lastProgressTs = Date.now();
@@ -1214,7 +1225,24 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     const realDuration = getRealVodDuration(video);
     const base = getRealVodCurrentTime(video);
     const target = realDuration > 0 ? Math.min(Math.max(0, base + delta), realDuration) : Math.max(0, base + delta);
-    void seekVodTranscodeTo(video, target);
+    optimisticVodTimeSeconds = target;
+    if (realDuration > 0) {
+      setVodSeekVisualPercent(target / realDuration);
+    }
+    updateVodProgressUi(video);
+    setVodPlayerBufferingVisible(true);
+    seekVodTranscodeTo(video, target).then(
+      (ok) => {
+        if (!ok) {
+          optimisticVodTimeSeconds = null;
+          updateVodProgressUi(video);
+        }
+      },
+      () => {
+        optimisticVodTimeSeconds = null;
+        updateVodProgressUi(video);
+      }
+    );
   };
 
   const onLoadedData = (): void => {
@@ -1240,10 +1268,26 @@ function attachVodPlaybackHelpers(video: HTMLVideoElement): void {
     const targetSeconds = percent * currentVodDurationSeconds;
     console.log("[VOD CTRL] pointer percent", percent);
     console.log("[VOD CTRL] targetSeconds", targetSeconds);
-    pendingVodSeekTargetSeconds = targetSeconds;
+    // 1. Move the UI immediately to the clicked position.
+    optimisticVodTimeSeconds = targetSeconds;
     setVodSeekVisualPercent(percent);
     updateVodProgressUi(video);
-    void seekVodTranscodeTo(video, targetSeconds);
+    setVodPlayerBufferingVisible(true);
+    // 2. Then run the existing (working) seek/session reload logic. We only
+    //    clear the optimistic value if the seek itself failed; on success we
+    //    wait for the `playing` event of the new session to clear it.
+    seekVodTranscodeTo(video, targetSeconds).then(
+      (ok) => {
+        if (!ok) {
+          optimisticVodTimeSeconds = null;
+          updateVodProgressUi(video);
+        }
+      },
+      () => {
+        optimisticVodTimeSeconds = null;
+        updateVodProgressUi(video);
+      }
+    );
   };
   const updateDragPercent = (event: PointerEvent): void => {
     if (!isVodTranscode || !elVodCtlSeekTrack) return;

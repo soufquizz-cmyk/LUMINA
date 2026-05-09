@@ -10,6 +10,9 @@
     },
     "api/r2-package-cover.ts": {
       "maxDuration": 30
+    },
+    "api/trial.ts": {
+      "maxDuration": 15
     }
   }
 }

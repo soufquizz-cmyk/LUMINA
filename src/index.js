@@ -35,6 +35,11 @@ function canonicalTrialIpKey(raw) {
 }
 
 function trialClientIp(request) {
+  const vff = request.headers.get("x-vercel-forwarded-for");
+  if (vff) {
+    const first = vff.split(",")[0]?.trim();
+    if (first) return canonicalTrialIpKey(first);
+  }
   const xff = request.headers.get("x-forwarded-for");
   if (xff) {
     const first = xff.split(",")[0]?.trim();

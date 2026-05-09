@@ -47,12 +47,6 @@ let vodVideo: HTMLVideoElement | null = null;
 let getIsAdmin: (() => boolean) | null = null;
 let stopAllPlayback: (() => void) | null = null;
 
-function trialUiFallbackMode(): boolean {
-  const v = (import.meta.env.VITE_TRIAL_UI_PREVIEW as string | undefined)?.trim().toLowerCase();
-  const preview = v === "1" || v === "true" || v === "yes";
-  return import.meta.env.DEV || preview;
-}
-
 function apiUrl(): string {
   const base = (import.meta.env.VITE_TRIAL_API_BASE as string | undefined)?.trim();
   if (base) return `${base.replace(/\/+$/, "")}${API_PATH}`;
@@ -162,30 +156,36 @@ async function fetchStatus(method: "GET" | "POST", body?: object): Promise<Trial
   }
 }
 
+function syncTrialHintForVisualOnly(): void {
+  const hint = document.getElementById("trial-timer-hint");
+  if (!hint) return;
+  if (import.meta.env.DEV) {
+    hint.textContent = "Local";
+    hint.title = "Compteur local : l’API /api/trial ne comptabilise pas (clés Supabase ou route).";
+  } else {
+    hint.textContent = "Démo";
+    hint.title =
+      "Quota serveur inactif : sur Vercel, ajoutez SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY, et vérifiez que la fonction /api/trial répond (GET 200).";
+  }
+  hint.classList.remove("hidden");
+}
+
 function applyPayload(p: TrialApiPayload | null): void {
-  const fallback = trialUiFallbackMode() && (!p || p.trialDisabled);
   if (!p || p.trialDisabled) {
     trialActive = false;
     exhausted = false;
     hidePaywall();
-    if (fallback) {
-      trialVisualOnly = true;
-      limitSeconds =
-        typeof p?.limitSeconds === "number" && Number.isFinite(p.limitSeconds) ? p.limitSeconds : 60;
-      serverRemainingSec = limitSeconds;
-      unbilledPlaySec = 0;
-      debtMarkWallMs = Date.now();
-      debtMarkWasPlaying = anyVideoPlaying();
-      showTimer(true);
-      updateTimerLabel();
-      elRoot?.classList.add("trial-timer-root--visual-only");
-      document.getElementById("trial-timer-hint")?.classList.remove("hidden");
-      return;
-    }
-    trialVisualOnly = false;
-    elRoot?.classList.remove("trial-timer-root--visual-only");
-    document.getElementById("trial-timer-hint")?.classList.add("hidden");
-    showTimer(false);
+    trialVisualOnly = true;
+    limitSeconds =
+      typeof p?.limitSeconds === "number" && Number.isFinite(p.limitSeconds) ? p.limitSeconds : 60;
+    serverRemainingSec = limitSeconds;
+    unbilledPlaySec = 0;
+    debtMarkWallMs = Date.now();
+    debtMarkWasPlaying = anyVideoPlaying();
+    showTimer(true);
+    updateTimerLabel();
+    elRoot?.classList.add("trial-timer-root--visual-only");
+    syncTrialHintForVisualOnly();
     return;
   }
   trialVisualOnly = false;

@@ -31,11 +31,6 @@ interface ImportMetaEnv {
   readonly VITE_TRIAL_API_BASE?: string;
   /** Trial length in seconds, default 60 (server: `VITE_TRIAL_SECONDS` or `TRIAL_SECONDS`). */
   readonly VITE_TRIAL_SECONDS?: string;
-  /**
-   * When "1" or "true": if the trial API is disabled or unreachable, still show the trial pill (countdown UI only,
-   * no paywall). Useful for `vite preview` where `import.meta.env.DEV` is false.
-   */
-  readonly VITE_TRIAL_UI_PREVIEW?: string;
 }
 
 interface ImportMeta {

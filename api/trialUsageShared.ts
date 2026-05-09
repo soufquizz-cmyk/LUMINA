@@ -31,6 +31,11 @@ export function canonicalTrialIpKey(raw: string): string {
 }
 
 export function trialClientIp(req: IncomingMessage): string {
+  const vff = headerString(req, "x-vercel-forwarded-for");
+  if (vff) {
+    const first = vff.split(",")[0]?.trim();
+    if (first) return canonicalTrialIpKey(first);
+  }
   const xff = headerString(req, "x-forwarded-for");
   if (xff) {
     const first = xff.split(",")[0]?.trim();

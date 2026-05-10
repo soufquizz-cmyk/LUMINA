@@ -1,27 +1,4 @@
-<!DOCTYPE html>
-<html lang="fr">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
-    <title>VeloraVIP Premium</title>
-    <link rel="icon" href="/logos/favicon.ico" sizes="any" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/logos/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/logos/favicon-16x16.png" />
-    <link rel="apple-touch-icon" href="/logos/apple-touch-icon.png" />
-    <link rel="manifest" href="/logos/site.webmanifest" />
-    <meta name="theme-color" content="#0b0b0f" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="/src/style.css" />
-  </head>
-  <body>
+<body class="vite-autoconnect" cz-shortcut-listen="true">
     <div id="settings-shell" class="settings-shell countries-admin-page hidden" aria-hidden="true">
       <div id="settings-view-granted">
         <header class="countries-admin-head">
@@ -47,11 +24,11 @@
             <div class="field row">
               <div>
                 <label for="cc-match">Clé (ex. france, brazil, [ALB])</label>
-                <input id="cc-match" type="text" placeholder="france ou [ALB]" autocomplete="off" />
+                <input id="cc-match" type="text" placeholder="france ou [ALB]" autocomplete="off">
               </div>
               <div>
                 <label for="cc-display">Nom affiché</label>
-                <input id="cc-display" type="text" placeholder="France" autocomplete="off" />
+                <input id="cc-display" type="text" placeholder="France" autocomplete="off">
               </div>
             </div>
             <div class="actions">
@@ -76,7 +53,7 @@
             <div class="field row">
               <div>
                 <label for="cn-prefix-val">Préfixe</label>
-                <input id="cn-prefix-val" type="text" placeholder="FR - " autocomplete="off" />
+                <input id="cn-prefix-val" type="text" placeholder="FR - " autocomplete="off">
               </div>
             </div>
             <div class="actions">
@@ -95,7 +72,7 @@
             <div class="field row">
               <div>
                 <label for="hf-needle">Mot ou fragment</label>
-                <input id="hf-needle" type="text" placeholder="18+" autocomplete="off" />
+                <input id="hf-needle" type="text" placeholder="18+" autocomplete="off">
               </div>
             </div>
             <div class="actions">
@@ -142,12 +119,12 @@
     </div>
 
     <div class="app">
-      <header class="header header--login-only">
+      <header class="header header--login-only hidden">
         <h1>Xtream Codes Player</h1>
         <p class="sub">Connexion Nodecast — proxy API et flux (CORS).</p>
       </header>
 
-      <section class="panel login-panel">
+      <section class="panel login-panel hidden">
         <div class="login-card">
           <div class="login-card__brand">
             <span class="login-card__play" aria-hidden="true">▶</span>
@@ -158,21 +135,16 @@
           </div>
           <div class="field">
             <label for="server">URL du serveur</label>
-            <input
-              id="server"
-              type="url"
-              placeholder="http://exemple.com:8080"
-              autocomplete="off"
-            />
+            <input id="server" type="url" placeholder="http://exemple.com:8080" autocomplete="off">
           </div>
           <div class="field row">
             <div>
               <label for="user">Identifiant</label>
-              <input id="user" type="text" autocomplete="username" />
+              <input id="user" type="text" autocomplete="username">
             </div>
             <div>
               <label for="pass">Mot de passe</label>
-              <input id="pass" type="password" autocomplete="current-password" />
+              <input id="pass" type="password" autocomplete="current-password">
             </div>
           </div>
           <div class="actions">
@@ -182,32 +154,24 @@
         </div>
       </section>
 
-      <main class="main main--velora hidden" id="main">
+      <main class="main main--velora main--velora-in-package" id="main" style="--vel-bg: #0f1530; --vel-surface: #1b285d; --vel-primary: #5677d3; --vel-accent-glow: rgba(86, 119, 211, 0.38);">
         <div class="vel-dashboard">
           <div class="vel-sticky-top">
           <header class="vel-header">
             <button type="button" id="btn-logo-home" class="vel-brand vel-brand--home" aria-label="Retour à l'accueil">
-              Velora<span class="vel-brand-vip"
-                ><span class="vel-brand-vip__v">V</span><span class="vel-brand-vip__i">I</span
-                ><span class="vel-brand-vip__p">P</span></span>
+              Velora<span class="vel-brand-vip"><span class="vel-brand-vip__v">V</span><span class="vel-brand-vip__i">I</span><span class="vel-brand-vip__p">P</span></span>
             </button>
             <div class="vel-header__right">
               <div class="vel-header__country">
-                <select id="country-select" class="country-select" aria-label="Pays"></select>
+                <select id="country-select" class="country-select" aria-label="Pays"><option value="185cbe43-556c-40ed-84f1-cc3893845eb3">Afrique</option><option value="410fe400-4f6a-4959-b272-ded25d41639f">Albania</option><option value="f271ff47-e273-4b66-a898-1ab36d2b454e">Allmagne</option><option value="f889eb4a-0ce9-4b2f-b745-462e9a2a9fcb">Amérique</option><option value="1a337fb6-7045-42b9-8bad-b76da03ac0b7">Arabe</option><option value="3ea968b5-0c65-4368-a5a4-2e7cbeaf47b7">Asie</option><option value="9c51429b-0e4d-42e4-a307-1b0b53161cd8">Espain</option><option value="f7363f6e-cc0f-4bcf-ae92-ca815a568d80">Europe</option><option value="3b9fc1c4-5fa2-4345-88b7-44953802a5ec">France</option><option value="1287aee7-376e-4548-9fb0-52b431c0925f">Italie</option><option value="dcb48ff1-2d4f-4481-9c18-fdf7c322ffc7">NL</option><option value="1d896cf2-6cdd-45c8-a3be-125c4c04344c">Portogal</option><option value="c6a3d2d1-9b70-45f4-bf4f-18096b2ee33b">UK</option><option value="06232bc3-81c4-4cfe-a168-ad0ff1bf5a50">USA</option><option value="country__other">Autres</option></select>
               </div>
-              <button
-                type="button"
-                id="btn-settings"
-                class="vel-settings-btn hidden"
-                title="Paramètres (admin)"
-                aria-label="Paramètres administrateur"
-              >
+              <button type="button" id="btn-settings" class="vel-settings-btn hidden" title="Paramètres (admin)" aria-label="Paramètres administrateur">
                 P
               </button>
               <div id="vel-admin-tools-wrap" class="vel-admin-tools-wrap hidden">
                 <label class="vel-admin-tools" title="Afficher ou masquer le + et la suppression des bouquets Supabase">
                   <span class="vel-admin-tools__switch">
-                    <input type="checkbox" id="toggle-admin-ui" role="switch" aria-checked="true" />
+                    <input type="checkbox" id="toggle-admin-ui" role="switch" aria-checked="true">
                     <span class="vel-admin-tools__track" aria-hidden="true"></span>
                   </span>
 
@@ -221,91 +185,44 @@
 
           <p id="vel-curate-status" class="vel-curate-status hidden" role="status" aria-live="polite"></p>
 
-          <div id="now-playing" class="player-now-playing vel-now-playing hidden" role="status" aria-live="polite"></div>
+          <div id="now-playing" class="player-now-playing vel-now-playing hidden" role="status" aria-live="polite" aria-hidden="true"></div>
 
           <div id="player-container" class="player-container hidden" aria-hidden="true">
-            <button
-              type="button"
-              id="btn-close-player"
-              class="vel-player-dismiss-x hidden"
-              title="Fermer le lecteur"
-              aria-label="Fermer le lecteur"
-            >
+            <button type="button" id="btn-close-player" class="vel-player-dismiss-x hidden" title="Fermer le lecteur" aria-label="Fermer le lecteur">
               ×
             </button>
             <div class="video-wrapper">
-              <video id="video" controls playsinline preload="auto" crossorigin="anonymous"></video>
-              <div
-                id="player-buffering"
-                class="player-buffering hidden"
-                aria-hidden="true"
-                role="status"
-                aria-live="polite"
-                aria-label="Chargement de la lecture"
-              >
+              <video id="video" controls="" playsinline="" preload="auto" crossorigin="anonymous"></video>
+              <div id="player-buffering" class="player-buffering hidden" aria-hidden="true" role="status" aria-live="polite" aria-label="Chargement de la lecture">
                 <div class="player-buffering__spinner" aria-hidden="true"></div>
                 <span class="player-buffering__label">Chargement…</span>
               </div>
             </div>
           </div>
 
-          <div
-            id="now-playing-vod"
-            class="player-now-playing vel-now-playing vel-now-playing--vod hidden"
-            role="status"
-            aria-live="polite"
-            aria-hidden="true"
-          ></div>
+          <div id="now-playing-vod" class="player-now-playing vel-now-playing vel-now-playing--vod hidden" role="status" aria-live="polite" aria-hidden="true"></div>
 
           <div id="vod-player-container" class="player-container player-container--vod hidden" aria-hidden="true">
-            <button
-              type="button"
-              id="btn-close-vod-player"
-              class="vel-player-dismiss-x hidden"
-              title="Fermer le lecteur VOD"
-              aria-label="Fermer le lecteur VOD"
-            >
+            <button type="button" id="btn-close-vod-player" class="vel-player-dismiss-x hidden" title="Fermer le lecteur VOD" aria-label="Fermer le lecteur VOD">
               ×
             </button>
             <div class="video-wrapper">
-              <video
-                id="video-vod"
-                controls
-                playsinline
-                preload="auto"
-                crossorigin="anonymous"
-              ></video>
-              <div
-                id="vod-player-buffering"
-                class="player-buffering hidden"
-                aria-hidden="true"
-                role="status"
-                aria-live="polite"
-                aria-label="Chargement du film"
-              >
+              <video id="video-vod" playsinline="" preload="none" crossorigin="anonymous" controls="" src=""></video>
+              <div id="vod-player-buffering" class="player-buffering hidden" aria-hidden="true" role="status" aria-live="polite" aria-label="Chargement du film">
                 <div class="player-buffering__spinner" aria-hidden="true"></div>
                 <span class="player-buffering__label">Chargement…</span>
               </div>
               <div id="vod-controls-overlay" class="vod-controls-overlay hidden" aria-hidden="true">
                 <div class="vod-controls-row">
-                  <button id="vod-ctl-play" type="button" class="vod-ctl-btn" aria-label="Play"></button>
-                  <button id="vod-ctl-mute" type="button" class="vod-ctl-btn" aria-label="Mute"></button>
-                  <span id="vod-ctl-current" class="vod-ctl-time">00:00:00</span>
-                  <div
-                    id="vod-ctl-seek-track"
-                    class="vod-ctl-seek-track"
-                    role="slider"
-                    aria-label="Seek"
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow="0"
-                    tabindex="0"
-                  >
-                    <div id="vod-ctl-seek-fill" class="vod-ctl-seek-fill"></div>
-                    <div id="vod-ctl-seek-handle" class="vod-ctl-seek-handle"></div>
+                  <button id="vod-ctl-play" type="button" class="vod-ctl-btn" aria-label="Pause" title="Pause"><span class="vod-ctl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="6" width="4" height="12" rx="1.1" fill="currentColor"></rect><rect x="13" y="6" width="4" height="12" rx="1.1" fill="currentColor"></rect></svg></span></button>
+                  <button id="vod-ctl-mute" type="button" class="vod-ctl-btn" aria-label="Mute" title="Mute"><span class="vod-ctl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10H4z" fill="currentColor"></path><path d="M16.5 8.2a1 1 0 0 1 1.4 0A6 6 0 0 1 19.5 12a6 6 0 0 1-1.6 3.8 1 1 0 1 1-1.5-1.3A4 4 0 0 0 17.5 12a4 4 0 0 0-1.1-2.5 1 1 0 0 1 .1-1.3z" fill="currentColor"></path></svg></span></button>
+                  <span id="vod-ctl-current" class="vod-ctl-time">00:00:05</span>
+                  <div id="vod-ctl-seek-track" class="vod-ctl-seek-track" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+                    <div id="vod-ctl-seek-fill" class="vod-ctl-seek-fill" style="width: 0%;"></div>
+                    <div id="vod-ctl-seek-handle" class="vod-ctl-seek-handle" style="left: 0%;"></div>
                   </div>
-                  <span id="vod-ctl-duration" class="vod-ctl-time">00:00:00</span>
-                  <button id="vod-ctl-fullscreen" type="button" class="vod-ctl-btn" aria-label="Fullscreen"></button>
+                  <span id="vod-ctl-duration" class="vod-ctl-time">02:05:46</span>
+                  <button id="vod-ctl-fullscreen" type="button" class="vod-ctl-btn" aria-label="Fullscreen" title="Fullscreen"><span class="vod-ctl-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H4a1 1 0 0 0-1 1v4m14-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m13-5v4a1 1 0 0 1-1 1h-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"></path></svg></span></button>
                 </div>
               </div>
             </div>
@@ -316,13 +233,7 @@
               <button type="button" id="btn-back-home" class="back-btn" title="Retour à l'accueil">
                 <span class="back-btn__icon" aria-hidden="true">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      d="M14 6L8 12l6 6"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
+                    <path d="M14 6L8 12l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
                   </svg>
                 </span>
                 <span class="back-btn__text">Liste</span>
@@ -330,13 +241,7 @@
               <button type="button" id="btn-go-home" class="back-btn back-btn--secondary" title="Retour à l'accueil">
                 <span class="back-btn__icon" aria-hidden="true">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      d="M3 10.8L12 4l9 6.8V20a1 1 0 0 1-1 1h-5.5v-6.2h-5V21H4a1 1 0 0 1-1-1v-9.2z"
-                      stroke="currentColor"
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
+                    <path d="M3 10.8L12 4l9 6.8V20a1 1 0 0 1-1 1h-5.5v-6.2h-5V21H4a1 1 0 0 1-1-1v-9.2z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
                   </svg>
                 </span>
                 <span class="back-btn__text">Accueil</span>
@@ -351,11 +256,11 @@
           </div>
 
           <aside class="vel-sidebar" aria-label="Navigation et pays">
-            <div class="nav-tabs" id="main-tabs" role="tablist">
-              <button type="button" class="tab tab--vip-v active" id="tab-live" data-tab="live" role="tab">
+            <div class="nav-tabs hidden" id="main-tabs" role="tablist">
+              <button type="button" class="tab tab--vip-v" id="tab-live" data-tab="live" role="tab">
                  LIVE
               </button>
-              <button type="button" class="tab tab--vip-i" id="tab-movies" data-tab="movies" role="tab">
+              <button type="button" class="tab tab--vip-i active" id="tab-movies" data-tab="movies" role="tab">
                 FILMS
               </button>
               <button type="button" class="tab tab--vip-p" id="tab-series" data-tab="series" role="tab">
@@ -365,26 +270,19 @@
           </aside>
 
           <div class="vel-body">
-            <div id="packages-view" class="grid vel-packages" aria-label="Bouquets"></div>
+            <div id="packages-view" class="grid vel-packages hidden" aria-label="Bouquets"><button type="button" class="vel-package-card" data-package-id="714" aria-label="VOD - NETFLIX [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/714/1777918097874-1ja2hat0.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - NETFLIX [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1461" aria-label="VOD - APPLE TV [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1461/1778062346520-wsh1ehst.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - APPLE TV [FR]</span></button><button type="button" class="vel-package-card" data-package-id="716" aria-label="VOD - DISNEY+ [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/716/1778063271038-vn985wpj.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - DISNEY+ [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1214" aria-label="VOD - PRIME+ [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1214/1778068060813-7yqvqtq4.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - PRIME+ [FR]</span></button><button type="button" class="vel-package-card" data-package-id="857" aria-label="VOD - RÉCEMMENT AJOUTER [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/857/1778251372880-ie9ce8uz.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - RÉCEMMENT AJOUTER [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1038" aria-label="VOD - OTHERS [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1038/1778252409421-214bpt5n.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - OTHERS [FR]</span></button><button type="button" class="vel-package-card" data-package-id="638" aria-label="VOD - ACTION [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/638/1778251738592-2uzqh0fi.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - ACTION [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1565" aria-label="VOD - DRAME [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1565/1778070331600-t2549wwa.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - DRAME [FR]</span></button><button type="button" class="vel-package-card" data-package-id="582" aria-label="VOD - ANIME [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/582/1778252785856-2nqj5c89.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - ANIME [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1561" aria-label="VOD - COMEDIE [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1561/1778070311534-csvi902u.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - COMEDIE [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1562" aria-label="VOD - CRIME-THRILLER [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1562/1778256044933-sq80bu8g.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - CRIME-THRILLER [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1566" aria-label="VOD - DOCUMENTAIRE [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1566/1778070353418-3c2re8lx.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - DOCUMENTAIRE [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1636" aria-label="VOD - FILMOGRAPHIE LOUIS DE FUNES [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1636/1778250928855-l1ev4pik.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - FILMOGRAPHIE LOUIS DE FUNES [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1563" aria-label="VOD - HORREUR [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1563/1778250797670-u38gmtjq.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - HORREUR [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1564" aria-label="VOD - ROMANCE [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1564/1778256408707-6eso0g4z.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - ROMANCE [FR]</span></button><button type="button" class="vel-package-card" data-package-id="1560" aria-label="VOD - SCIENCE-FICTION [FR]"><img alt="" role="presentation" src="https://pub-64908156f66740e19f4e8abe3772f3d8.r2.dev/1560/1778070363482-66wsql1m.jpg" class="vel-package-card__art vel-package-card__art--cover"><span class="vel-package-card__title">VOD - SCIENCE-FICTION [FR]</span></button></div>
 
-            <div id="content-view" class="hidden">
+            <div id="content-view" class="content-view--vod-film-detail">
               <div id="cat-pills-wrap" class="cat-pills-wrap vel-cat-pills-wrap hidden">
                 <div id="cat-pills" class="vel-pills" role="tablist" aria-label="Filtres"></div>
               </div>
-              <div class="item-list" id="dynamic-list"></div>
+              <div class="item-list item-list--vod-film-detail" id="dynamic-list"><article class="vel-vod-detail" aria-label="300&nbsp;: La Naissance d’un Empire (2014)"><div class="vel-vod-detail__bg vel-vod-detail__bg--entered" style="background-image: url(&quot;/proxy?target=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw780%2Fchjkfyo57JexWo1YeIZRMk8wA4m.jpg&amp;from=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw780%2Fchjkfyo57JexWo1YeIZRMk8wA4m.jpg&quot;);"></div><div class="vel-vod-detail__inner"><h1 class="vel-vod-detail__title">300&nbsp;: La Naissance d’un Empire (2014)</h1><button type="button" class="vel-vod-detail__watch vel-vod-detail__watch--film primary" aria-label="Regarder « 300&nbsp;: La Naissance d’un Empire (2014) »">Regarder</button><div class="vel-vod-detail__meta"><span class="vel-vod-detail__rating">★ 6.113</span><span class="vel-vod-detail__genre">Action, Drame, Guerre</span></div><p class="vel-vod-detail__plot">En l’an 490 avant J.C., les troupes athéniennes doivent contrer les attaques de l’empire perse. Une grande bataille se prépare. Non loin d’Athènes, à 42 km au nord, Marathon est l’un des derniers remparts protégeant la grande Athènes. Les Perses sont nombreux, beaucoup plus nombreux que les Athéniens, qui vont devoir faire appel aux Spartiates pour les aider.</p><section class="vel-vod-detail__section"><h2 class="vel-vod-detail__section-title">Distribution</h2><p class="vel-vod-detail__cast">Sullivan Stapleton, Eva Green, Lena Headey, Callan Mulvey, David Wenham, Rodrigo Santoro, Jack O'Connell, Andrew Tiernan, Ashraf Barhom, Andrew Pleavin</p></section><section class="vel-vod-detail__section"><h2 class="vel-vod-detail__section-title">Réalisation</h2><p class="vel-vod-detail__director">Noam Murro</p></section></div></article></div>
             </div>
           </div>
         </div>
       </main>
 
-      <div
-        id="catalog-loading-overlay"
-        class="catalog-loading-overlay hidden"
-        aria-hidden="true"
-        role="status"
-        aria-live="polite"
-        aria-label="Chargement du catalogue"
-      >
+      <div id="catalog-loading-overlay" class="catalog-loading-overlay hidden" aria-hidden="true" role="status" aria-live="polite" aria-label="Chargement du catalogue" style="">
         <div class="catalog-loading-overlay__aurora" aria-hidden="true"></div>
         <div class="catalog-loading-overlay__grid" aria-hidden="true"></div>
         <div class="catalog-loading-overlay__vignette" aria-hidden="true"></div>
@@ -396,9 +294,7 @@
             </div>
           </div>
           <p class="catalog-loading-overlay__brand">
-            Velora<span class="vel-brand-vip"
-              ><span class="vel-brand-vip__v">V</span><span class="vel-brand-vip__i">I</span
-              ><span class="vel-brand-vip__p">P</span></span>
+            Velora<span class="vel-brand-vip"><span class="vel-brand-vip__v">V</span><span class="vel-brand-vip__i">I</span><span class="vel-brand-vip__p">P</span></span>
           </p>
           <p id="catalog-loading-status" class="catalog-loading-overlay__status">Chargement du catalogue…</p>
           <div class="catalog-loading-overlay__eq" aria-hidden="true">
@@ -420,13 +316,7 @@
         <p id="add-channels-package-hint" class="admin-add-package-dialog__hint"></p>
         <div class="field">
           <label for="add-channels-search">Rechercher</label>
-          <input
-            id="add-channels-search"
-            type="search"
-            class="admin-add-package-dialog__input"
-            placeholder="Nom de chaîne…"
-            autocomplete="off"
-          />
+          <input id="add-channels-search" type="search" class="admin-add-package-dialog__input" placeholder="Nom de chaîne…" autocomplete="off">
         </div>
         <div id="add-channels-list" class="add-channels-list" role="group" aria-label="Chaînes disponibles"></div>
         <p id="add-channels-status" class="status" aria-live="polite"></p>
@@ -444,16 +334,9 @@
       <div class="admin-add-package-dialog__panel admin-cover-dialog__panel">
         <h2 class="admin-add-package-dialog__title">Image et couleurs du bouquet</h2>
         <p id="pce-package-name" class="admin-add-package-dialog__hint"></p>
-        <input type="hidden" id="pce-package-id" value="" />
+        <input type="hidden" id="pce-package-id" value="">
         <div class="cover-upload">
-          <input
-            id="pce-cover"
-            type="file"
-            class="cover-upload__input"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            tabindex="-1"
-            aria-label="Fichier image"
-          />
+          <input id="pce-cover" type="file" class="cover-upload__input" accept="image/jpeg,image/png,image/webp,image/gif" tabindex="-1" aria-label="Fichier image">
           <div id="pce-dropzone" class="cover-upload__card">
             <div class="cover-upload__glow" aria-hidden="true"></div>
             <div id="pce-cover-empty" class="cover-upload__empty">
@@ -462,7 +345,7 @@
               <p class="cover-upload__limits">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
             </div>
             <div id="pce-cover-preview-wrap" class="cover-upload__preview-wrap hidden">
-              <img id="pce-cover-preview" class="cover-upload__preview" alt="" decoding="async" />
+              <img id="pce-cover-preview" class="cover-upload__preview" alt="" decoding="async">
               <p class="cover-upload__limits cover-upload__limits--below-preview">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
             </div>
             <button type="button" id="pce-cover-pick" class="cover-upload__btn">Choisir une image</button>
@@ -478,37 +361,23 @@
           <div class="admin-cover-theme-grid">
             <label class="admin-cover-theme-row">
               <span class="admin-cover-theme-row__label">Fond</span>
-              <input type="color" id="pce-theme-bg" title="Fond" />
+              <input type="color" id="pce-theme-bg" title="Fond">
             </label>
             <label class="admin-cover-theme-row">
               <span class="admin-cover-theme-row__label">Surfaces</span>
-              <input type="color" id="pce-theme-surface" title="Surfaces" />
+              <input type="color" id="pce-theme-surface" title="Surfaces">
             </label>
             <label class="admin-cover-theme-row">
               <span class="admin-cover-theme-row__label">Accent</span>
-              <input type="color" id="pce-theme-primary" title="Accent" />
+              <input type="color" id="pce-theme-primary" title="Accent">
             </label>
             <label class="admin-cover-theme-row admin-cover-theme-row--wide">
               <span class="admin-cover-theme-row__label">Halo (accent)</span>
-              <input
-                type="text"
-                id="pce-theme-glow"
-                class="admin-cover-theme-text"
-                placeholder="rgba(138, 43, 226, 0.3)"
-                spellcheck="false"
-                autocomplete="off"
-              />
+              <input type="text" id="pce-theme-glow" class="admin-cover-theme-text" placeholder="rgba(138, 43, 226, 0.3)" spellcheck="false" autocomplete="off">
             </label>
             <label class="admin-cover-theme-row admin-cover-theme-row--wide">
               <span class="admin-cover-theme-row__label">Lien « retour » (optionnel)</span>
-              <input
-                type="text"
-                id="pce-theme-back"
-                class="admin-cover-theme-text"
-                placeholder="#a78bfa ou rgba(…)"
-                spellcheck="false"
-                autocomplete="off"
-              />
+              <input type="text" id="pce-theme-back" class="admin-cover-theme-text" placeholder="#a78bfa ou rgba(…)" spellcheck="false" autocomplete="off">
             </label>
           </div>
           <button type="button" id="pce-theme-reset" class="countries-admin-cancel admin-cover-theme-reset">
@@ -556,13 +425,7 @@
         <div id="dap-create-country-field" class="field">
           <label for="dap-new-country-name">Créer un pays (secours)</label>
           <div class="admin-add-package-dialog__row">
-            <input
-              id="dap-new-country-name"
-              type="text"
-              class="admin-add-package-dialog__input"
-              placeholder="Ex. France"
-              autocomplete="off"
-            />
+            <input id="dap-new-country-name" type="text" class="admin-add-package-dialog__input" placeholder="Ex. France" autocomplete="off">
             <button type="button" id="dap-add-country" class="countries-admin-cancel">Ajouter le pays</button>
           </div>
         </div>
@@ -572,19 +435,12 @@
         </div>
         <div class="field">
           <label for="dap-name">Nom du package</label>
-          <input id="dap-name" type="text" placeholder="Ex. Sports HD" autocomplete="off" />
+          <input id="dap-name" type="text" placeholder="Ex. Sports HD" autocomplete="off">
         </div>
         <div class="field">
           <span class="cover-upload-field-label">Image du bouquet (optionnel)</span>
           <div class="cover-upload">
-            <input
-              id="dap-cover"
-              type="file"
-              class="cover-upload__input"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              tabindex="-1"
-              aria-label="Image du bouquet"
-            />
+            <input id="dap-cover" type="file" class="cover-upload__input" accept="image/jpeg,image/png,image/webp,image/gif" tabindex="-1" aria-label="Image du bouquet">
             <div id="dap-dropzone" class="cover-upload__card cover-upload__card--compact">
               <div class="cover-upload__glow" aria-hidden="true"></div>
               <div id="dap-cover-empty" class="cover-upload__empty">
@@ -593,7 +449,7 @@
                 <p class="cover-upload__limits">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
               </div>
               <div id="dap-cover-preview-wrap" class="cover-upload__preview-wrap hidden">
-                <img id="dap-cover-preview" class="cover-upload__preview" alt="" decoding="async" />
+                <img id="dap-cover-preview" class="cover-upload__preview" alt="" decoding="async">
                 <p class="cover-upload__limits cover-upload__limits--below-preview">JPG, PNG, WebP ou GIF · max 2&nbsp;Mo</p>
               </div>
               <button type="button" id="dap-cover-pick" class="cover-upload__btn">Choisir une image</button>
@@ -620,13 +476,7 @@
           ou transparent (aperçu en damier, export PNG). Déplacez et zoomez pour cadrer ; dézoom = marges remplies par
           le fond choisi.
         </p>
-        <div
-          id="crop-sq-viewport"
-          class="cover-crop-viewport"
-          tabindex="0"
-          role="application"
-          aria-label="Aperçu du recadrage carré"
-        >
+        <div id="crop-sq-viewport" class="cover-crop-viewport" tabindex="0" role="application" aria-label="Aperçu du recadrage carré">
           <canvas id="crop-sq-canvas" width="300" height="300"></canvas>
         </div>
         <div class="cover-crop-fill">
@@ -640,19 +490,19 @@
           </div>
           <div id="crop-sq-fill-solid-row" class="cover-crop-fill-row">
             <label for="crop-sq-fill">Couleur</label>
-            <input type="color" id="crop-sq-fill" value="#141118" title="Fond autour de l’image" />
+            <input type="color" id="crop-sq-fill" value="#141118" title="Fond autour de l’image">
           </div>
           <div id="crop-sq-fill-gradient-row" class="cover-crop-fill-row cover-crop-fill-row--gradient hidden">
             <label for="crop-sq-fill-end">Couleur fin</label>
-            <input type="color" id="crop-sq-fill-end" value="#3d2a55" title="Deuxième couleur du dégradé" />
+            <input type="color" id="crop-sq-fill-end" value="#3d2a55" title="Deuxième couleur du dégradé">
             <label for="crop-sq-gradient-angle" class="cover-crop-fill-row__angle-label">Angle</label>
-            <input type="range" id="crop-sq-gradient-angle" min="0" max="360" value="145" step="1" title="Angle du dégradé (°)" />
+            <input type="range" id="crop-sq-gradient-angle" min="0" max="360" value="145" step="1" title="Angle du dégradé (°)">
             <span id="crop-sq-gradient-angle-val" class="cover-crop-fill-row__angle-val" aria-hidden="true">145°</span>
           </div>
         </div>
         <div class="cover-crop-zoom">
           <label for="crop-sq-zoom">Zoom</label>
-          <input type="range" id="crop-sq-zoom" min="35" max="300" value="100" step="2" />
+          <input type="range" id="crop-sq-zoom" min="35" max="300" value="100" step="2">
         </div>
         <p id="crop-sq-err" class="cover-crop-err" role="alert"></p>
         <div class="actions">
@@ -662,35 +512,7 @@
       </div>
     </dialog>
 
-    <div
-      id="trial-timer-root"
-      class="trial-timer-root hidden"
-      role="status"
-      aria-live="polite"
-      aria-label="Temps d'essai restant"
-    >
-      <span class="trial-timer-root__pulse" aria-hidden="true"></span>
-      <span class="trial-timer-root__label">Essai gratuit</span>
-      <span
-        id="trial-timer-hint"
-        class="trial-timer-root__hint hidden"
-        title="Compteur local sans API Supabase (dev)"
-        >Local</span>
-      <span id="trial-timer-count" class="trial-timer-root__count">1:00</span>
-    </div>
+    <script type="module" src="/src/main.ts?t=1778280845356"></script>
+  
 
-    <dialog id="trial-expired-dialog" class="trial-expired-dialog" aria-labelledby="trial-expired-title">
-      <div class="trial-expired-dialog__panel">
-        <div class="trial-expired-dialog__icon" aria-hidden="true"></div>
-        <h2 id="trial-expired-title" class="trial-expired-dialog__title">Essai terminé</h2>
-        <p class="trial-expired-dialog__text">
-          Votre période d’essai est terminée. Pour continuer à regarder, veuillez souscrire ou vous connecter avec un
-          accès payant.
-        </p>
-        <button type="button" id="trial-expired-close" class="trial-expired-dialog__btn primary">Compris</button>
-      </div>
-    </dialog>
-
-    <script type="module" src="/src/main.ts"></script>
-  </body>
-</html>
+</body>

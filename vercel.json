@@ -16,6 +16,9 @@
     },
     "api/trial-increment.ts": {
       "maxDuration": 10
+    },
+    "api/trial.ts": {
+      "maxDuration": 15
     }
   }
 }

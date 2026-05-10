@@ -71,6 +71,24 @@ export function imageUrlForDisplay(href: string): string {
   return proxiedUrl(t);
 }
 
+const TMDB_IMG_PATH_RE = /^https?:\/\/image\.tmdb\.org\/t\/p\/(w\d+|original)(\/[^?#]+)(\?.*)?$/i;
+
+/**
+ * Swap TMDB `w*` / `original` segment for a profile that matches display width × DPR
+ * (hero backdrops are full-bleed). Other URLs are returned unchanged.
+ */
+export function tmdbImageUrlMatchDisplayWidth(url: string, cssDisplayWidth: number, maxDpr = 2): string {
+  const trimmed = url.trim();
+  const m = trimmed.match(TMDB_IMG_PATH_RE);
+  if (!m) return trimmed;
+  const path = m[2];
+  const query = m[3] ?? "";
+  const dpr = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, maxDpr) : 1;
+  const need = Math.ceil(Math.max(280, cssDisplayWidth) * dpr);
+  const profile = need <= 520 ? "w500" : need <= 960 ? "w780" : "w1280";
+  return `https://image.tmdb.org/t/p/${profile}${path}${query}`;
+}
+
 const FETCH_TIMEOUT_MS = 90_000;
 /** POST /api/transcode/session should fail fast when the panel is broken (e.g. ENOENT on cache). */
 const TRANSCODE_SESSION_FETCH_MS = 18_000;
